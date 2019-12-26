@@ -50,7 +50,7 @@ func TestNewMux(t *testing.T) {
 			//c2.(*net.TCPConn).SetReadBuffer(0)
 			_ = goroutine.CopyConnsPool.Invoke(goroutine.NewConns(c, c2, nil))
 			//go func(c2 net.Conn, c *conn) {
-			//	wg := new(sync.WaitGroup)
+			//	wg := New(sync.WaitGroup)
 			//	wg.Add(2)
 			//	_ = poolConnCopy.Invoke(common.newConnGroup(c2, c, wg))
 			//	//go func() {
@@ -94,16 +94,16 @@ func TestNewMux(t *testing.T) {
 			}
 			//conns.(*net.TCPConn).SetReadBuffer(0)
 			//conns.(*net.TCPConn).SetReadBuffer(0)
-			//logs.Warn("nps accept success starting new conn")
+			//logs.Warn("nps accept success starting New conn")
 			tmpCpnn, err := m1.NewConn()
 			if err != nil {
-				logs.Warn("nps new conn err ", err)
+				logs.Warn("nps New conn err ", err)
 				continue
 			}
-			//logs.Warn("nps new conn success ", tmpCpnn.connId)
+			//logs.Warn("nps New conn success ", tmpCpnn.connId)
 			_ = goroutine.CopyConnsPool.Invoke(goroutine.NewConns(tmpCpnn, conns, nil))
 			//go func(tmpCpnn *conn, conns net.Conn) {
-			//	wg := new(sync.WaitGroup)
+			//	wg := New(sync.WaitGroup)
 			//	wg.Add(2)
 			//	_ = poolConnCopy.Invoke(common.newConnGroup(tmpCpnn, conns, wg))
 			//	//go func() {
@@ -310,7 +310,7 @@ func TestFIFO(t *testing.T) {
 	logs.EnableFuncCallDepth(true)
 	logs.SetLogFuncCallDepth(3)
 	time.Sleep(time.Second * 5)
-	d := new(ReceiveWindowQueue)
+	d := new(receiveWindowQueue)
 	d.New()
 	go func() {
 		time.Sleep(time.Second)
@@ -332,7 +332,7 @@ func TestFIFO(t *testing.T) {
 		time.Sleep(time.Second * 10)
 		for i := 0; i < 1000; i++ {
 			by := []byte("test " + strconv.Itoa(i) + " ") //
-			data, _ := NewListElement(by, uint16(len(by)), true)
+			data, _ := newListElement(by, uint16(len(by)), true)
 			//fmt.Println(string((*data).buf), data)
 			//logs.Warn(string((*data).buf), data)
 			d.Push(data)
@@ -348,14 +348,14 @@ func TestPriority(t *testing.T) {
 	logs.EnableFuncCallDepth(true)
 	logs.SetLogFuncCallDepth(3)
 	time.Sleep(time.Second * 5)
-	d := new(PriorityQueue)
+	d := new(priorityQueue)
 	d.New()
 	go func() {
 		time.Sleep(time.Second)
 		for i := 0; i < 360050; i++ {
 			data := d.Pop()
 			//fmt.Println(i, string(data.buf), err)
-			logs.Warn(i, string(data.Content), data)
+			logs.Warn(i, string(data.content), data)
 		}
 		logs.Warn("pop finish")
 	}()
@@ -398,10 +398,10 @@ func TestPriority(t *testing.T) {
 //	logs.EnableFuncCallDepth(true)
 //	logs.SetLogFuncCallDepth(3)
 //	time.Sleep(time.Second * 5)
-//	mux := new(Mux)
+//	mux := New(Mux)
 //	mux.bw.readBandwidth = float64(1*1024*1024)
 //	mux.latency = float64(1/1000)
-//	wind := new(ReceiveWindow)
+//	wind := New(receiveWindow)
 //	wind.New(mux)
 //	wind.
 //	go func() {
@@ -409,7 +409,7 @@ func TestPriority(t *testing.T) {
 //		for i := 0; i < 36000; i++ {
 //			data := d.Pop()
 //			//fmt.Println(i, string(data.buf), err)
-//			logs.Warn(i, string(data.Content), data)
+//			logs.Warn(i, string(data.content), data)
 //		}
 //	}()
 //	go func() {
@@ -417,23 +417,23 @@ func TestPriority(t *testing.T) {
 //		for i := 0; i < 3000; i++ {
 //			go func(i int) {
 //				for n := 0; n < 10; n++{
-//					data := new(common.MuxPackager)
+//					data := New(common.muxPackager)
 //					by := []byte("test " + strconv.Itoa(i) + strconv.Itoa(n))
 //					_ = data.NewPac(common.MUX_NEW_MSG_PART, int32(i), by)
 //					//fmt.Println(string((*data).buf), data)
-//					logs.Warn(string((*data).Content), data)
+//					logs.Warn(string((*data).content), data)
 //					d.Push(data)
 //				}
 //			}(i)
 //			go func(i int) {
-//				data := new(common.MuxPackager)
+//				data := New(common.muxPackager)
 //				_ = data.NewPac(common.MUX_NEW_CONN, int32(i), nil)
 //				//fmt.Println(string((*data).buf), data)
 //				logs.Warn(data)
 //				d.Push(data)
 //			}(i)
 //			go func(i int) {
-//				data := new(common.MuxPackager)
+//				data := New(common.muxPackager)
 //				_ = data.NewPac(common.MUX_NEW_CONN_OK, int32(i), nil)
 //				//fmt.Println(string((*data).buf), data)
 //				logs.Warn(data)

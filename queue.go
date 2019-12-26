@@ -11,7 +11,7 @@ import (
 	"unsafe"
 )
 
-type PriorityQueue struct {
+type priorityQueue struct {
 	highestChain *bufChain
 	middleChain  *bufChain
 	lowestChain  *bufChain
@@ -20,7 +20,7 @@ type PriorityQueue struct {
 	cond         *sync.Cond
 }
 
-func (Self *PriorityQueue) New() {
+func (Self *priorityQueue) New() {
 	Self.highestChain = new(bufChain)
 	Self.highestChain.new(4)
 	Self.middleChain = new(bufChain)
@@ -31,22 +31,20 @@ func (Self *PriorityQueue) New() {
 	Self.cond = sync.NewCond(locker)
 }
 
-func (Self *PriorityQueue) Push(packager *MuxPackager) {
-	//logs.Warn("push start")
+func (Self *priorityQueue) Push(packager *muxPackager) {
 	Self.push(packager)
 	Self.cond.Broadcast()
-	//logs.Warn("push finish")
 	return
 }
 
-func (Self *PriorityQueue) push(packager *MuxPackager) {
-	switch packager.Flag {
-	case MuxPingFlag, MuxPingReturn:
+func (Self *priorityQueue) push(packager *muxPackager) {
+	switch packager.flag {
+	case muxPingFlag, muxPingReturn:
 		Self.highestChain.pushHead(unsafe.Pointer(packager))
 	// the ping package need highest priority
 	// prevent ping calculation error
-	case MuxNewConn, MuxNewConnOk, MuxNewConnFail:
-		// the new conn package need some priority too
+	case muxNewConn, muxNewConnOk, muxNewConnFail:
+		// the New conn package need some priority too
 		Self.middleChain.pushHead(unsafe.Pointer(packager))
 	default:
 		Self.lowestChain.pushHead(unsafe.Pointer(packager))
@@ -55,7 +53,7 @@ func (Self *PriorityQueue) push(packager *MuxPackager) {
 
 const maxStarving uint8 = 8
 
-func (Self *PriorityQueue) Pop() (packager *MuxPackager) {
+func (Self *priorityQueue) Pop() (packager *muxPackager) {
 	var iter bool
 	for {
 		packager = Self.TryPop()
@@ -78,33 +76,31 @@ func (Self *PriorityQueue) Pop() (packager *MuxPackager) {
 		if Self.stop {
 			return
 		}
-		//logs.Warn("queue into wait")
 		Self.cond.Wait()
 		// wait for it with no more iter
 		packager = Self.TryPop()
-		//logs.Warn("queue wait finish", packager)
 	}
 	return
 }
 
-func (Self *PriorityQueue) TryPop() (packager *MuxPackager) {
+func (Self *priorityQueue) TryPop() (packager *muxPackager) {
 	ptr, ok := Self.highestChain.popTail()
 	if ok {
-		packager = (*MuxPackager)(ptr)
+		packager = (*muxPackager)(ptr)
 		return
 	}
 	if Self.starving < maxStarving {
 		// not pop too much, lowestChain will wait too long
 		ptr, ok = Self.middleChain.popTail()
 		if ok {
-			packager = (*MuxPackager)(ptr)
+			packager = (*muxPackager)(ptr)
 			Self.starving++
 			return
 		}
 	}
 	ptr, ok = Self.lowestChain.popTail()
 	if ok {
-		packager = (*MuxPackager)(ptr)
+		packager = (*muxPackager)(ptr)
 		if Self.starving > 0 {
 			Self.starving = Self.starving / 2
 		}
@@ -113,7 +109,7 @@ func (Self *PriorityQueue) TryPop() (packager *MuxPackager) {
 	if Self.starving > 0 {
 		ptr, ok = Self.middleChain.popTail()
 		if ok {
-			packager = (*MuxPackager)(ptr)
+			packager = (*muxPackager)(ptr)
 			Self.starving++
 			return
 		}
@@ -121,32 +117,32 @@ func (Self *PriorityQueue) TryPop() (packager *MuxPackager) {
 	return
 }
 
-func (Self *PriorityQueue) Stop() {
+func (Self *priorityQueue) Stop() {
 	Self.stop = true
 	Self.cond.Broadcast()
 }
 
-type ConnQueue struct {
+type connQueue struct {
 	chain    *bufChain
 	starving uint8
 	stop     bool
 	cond     *sync.Cond
 }
 
-func (Self *ConnQueue) New() {
+func (Self *connQueue) New() {
 	Self.chain = new(bufChain)
 	Self.chain.new(32)
 	locker := new(sync.Mutex)
 	Self.cond = sync.NewCond(locker)
 }
 
-func (Self *ConnQueue) Push(connection *conn) {
+func (Self *connQueue) Push(connection *conn) {
 	Self.chain.pushHead(unsafe.Pointer(connection))
 	Self.cond.Broadcast()
 	return
 }
 
-func (Self *ConnQueue) Pop() (connection *conn) {
+func (Self *connQueue) Pop() (connection *conn) {
 	var iter bool
 	for {
 		connection = Self.TryPop()
@@ -169,16 +165,14 @@ func (Self *ConnQueue) Pop() (connection *conn) {
 		if Self.stop {
 			return
 		}
-		//logs.Warn("queue into wait")
 		Self.cond.Wait()
 		// wait for it with no more iter
 		connection = Self.TryPop()
-		//logs.Warn("queue wait finish", packager)
 	}
 	return
 }
 
-func (Self *ConnQueue) TryPop() (connection *conn) {
+func (Self *connQueue) TryPop() (connection *conn) {
 	ptr, ok := Self.chain.popTail()
 	if ok {
 		connection = (*conn)(ptr)
@@ -187,43 +181,40 @@ func (Self *ConnQueue) TryPop() (connection *conn) {
 	return
 }
 
-func (Self *ConnQueue) Stop() {
+func (Self *connQueue) Stop() {
 	Self.stop = true
 	Self.cond.Broadcast()
 }
 
-type ListElement struct {
+type listElement struct {
 	Buf  []byte
 	L    uint16
 	Part bool
 }
 
-func (Self *ListElement) Reset() {
+func (Self *listElement) Reset() {
 	Self.L = 0
 	Self.Buf = nil
 	Self.Part = false
 }
 
-func NewListElement(buf []byte, l uint16, part bool) (element *ListElement, err error) {
+func newListElement(buf []byte, l uint16, part bool) (element *listElement, err error) {
 	if uint16(len(buf)) != l {
-		err = errors.New("ListElement: buf length not match")
+		err = errors.New("listElement: buf length not match")
 		return
 	}
-	//if l == 0 {
-	//	logs.Warn("push zero")
-	//}
-	element = ListElementPool.Get()
+	element = listEle.Get()
 	element.Buf = buf
 	element.L = l
 	element.Part = part
 	return
 }
 
-type ReceiveWindowQueue struct {
+type receiveWindowQueue struct {
 	chain      *bufChain
 	stopOp     chan struct{}
 	readOp     chan struct{}
-	lengthWait uint64 // really strange ???? need put here
+	lengthWait uint64 // really strange ???? need Put here
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	// On non-Linux ARM, the 64-bit functions use instructions unavailable before the ARMv6k core.
 	// On ARM, x86-32, and 32-bit MIPS, it is the caller's responsibility
@@ -232,14 +223,14 @@ type ReceiveWindowQueue struct {
 	timeout time.Time
 }
 
-func (Self *ReceiveWindowQueue) New() {
+func (Self *receiveWindowQueue) New() {
 	Self.readOp = make(chan struct{})
 	Self.chain = new(bufChain)
 	Self.chain.new(64)
 	Self.stopOp = make(chan struct{}, 2)
 }
 
-func (Self *ReceiveWindowQueue) Push(element *ListElement) {
+func (Self *receiveWindowQueue) Push(element *listElement) {
 	var length, wait uint32
 	for {
 		ptrs := atomic.LoadUint64(&Self.lengthWait)
@@ -250,16 +241,14 @@ func (Self *ReceiveWindowQueue) Push(element *ListElement) {
 		}
 		// another goroutine change the length or into wait, make sure
 	}
-	//logs.Warn("window push before", Self.Len(), uint32(element.l), len(element.buf))
 	Self.chain.pushHead(unsafe.Pointer(element))
-	//logs.Warn("window push", Self.Len())
 	if wait == 1 {
 		Self.allowPop()
 	}
 	return
 }
 
-func (Self *ReceiveWindowQueue) Pop() (element *ListElement, err error) {
+func (Self *receiveWindowQueue) Pop() (element *listElement, err error) {
 	var length uint32
 startPop:
 	ptrs := atomic.LoadUint64(&Self.lengthWait)
@@ -273,7 +262,7 @@ startPop:
 		if err != nil {
 			return
 		}
-		goto startPop // wait finish, trying to get the new status
+		goto startPop // wait finish, trying to Get the New status
 	}
 	// length is not zero, so try to pop
 	for {
@@ -285,20 +274,17 @@ startPop:
 	}
 }
 
-func (Self *ReceiveWindowQueue) TryPop() (element *ListElement) {
+func (Self *receiveWindowQueue) TryPop() (element *listElement) {
 	ptr, ok := Self.chain.popTail()
 	if ok {
-		//logs.Warn("window pop before", Self.Len())
-		element = (*ListElement)(ptr)
+		element = (*listElement)(ptr)
 		atomic.AddUint64(&Self.lengthWait, ^(uint64(element.L)<<dequeueBits - 1))
-		//logs.Warn("window pop", Self.Len(), uint32(element.l))
 		return
 	}
 	return nil
 }
 
-func (Self *ReceiveWindowQueue) allowPop() (closed bool) {
-	//logs.Warn("allow pop", Self.Len())
+func (Self *receiveWindowQueue) allowPop() (closed bool) {
 	select {
 	case Self.readOp <- struct{}{}:
 		return false
@@ -307,11 +293,10 @@ func (Self *ReceiveWindowQueue) allowPop() (closed bool) {
 	}
 }
 
-func (Self *ReceiveWindowQueue) waitPush() (err error) {
-	//logs.Warn("wait push")
-	//defer logs.Warn("wait push finish")
+func (Self *receiveWindowQueue) waitPush() (err error) {
 	t := Self.timeout.Sub(time.Now())
-	if t <= 0 { // not set the timeout, so wait for it without timeout, just like a tcp connection
+	if t <= 0 {
+		// not Set the timeout, so wait for it without timeout, just like a tcp connection
 		select {
 		case <-Self.readOp:
 			return nil
@@ -322,10 +307,8 @@ func (Self *ReceiveWindowQueue) waitPush() (err error) {
 	}
 	timer := time.NewTimer(t)
 	defer timer.Stop()
-	//logs.Warn("queue into wait")
 	select {
 	case <-Self.readOp:
-		//logs.Warn("queue wait finish")
 		return nil
 	case <-Self.stopOp:
 		err = io.EOF
@@ -336,18 +319,18 @@ func (Self *ReceiveWindowQueue) waitPush() (err error) {
 	}
 }
 
-func (Self *ReceiveWindowQueue) Len() (n uint32) {
+func (Self *receiveWindowQueue) Len() (n uint32) {
 	ptrs := atomic.LoadUint64(&Self.lengthWait)
 	n, _ = Self.chain.head.unpack(ptrs)
 	return
 }
 
-func (Self *ReceiveWindowQueue) Stop() {
+func (Self *receiveWindowQueue) Stop() {
 	Self.stopOp <- struct{}{}
 	Self.stopOp <- struct{}{}
 }
 
-func (Self *ReceiveWindowQueue) SetTimeOut(t time.Time) {
+func (Self *receiveWindowQueue) SetTimeOut(t time.Time) {
 	Self.timeout = t
 }
 
@@ -374,8 +357,8 @@ type bufDequeue struct {
 	// dequeue. The size of this must be a power of 2.
 	//
 	// A slot is still in use until *both* the tail
-	// index has moved beyond it and typ has been set to nil. This
-	// is set to nil atomically by the consumer and read
+	// index has moved beyond it and typ has been Set to nil. This
+	// is Set to nil atomically by the consumer and read
 	// atomically by the producer.
 	vals     []unsafe.Pointer
 	starving uint32
@@ -476,7 +459,7 @@ func (d *bufDequeue) popTail() (unsafe.Pointer, bool) {
 //
 // This is implemented as a doubly-linked list queue of poolDequeues
 // where each dequeue is double the size of the previous one. Once a
-// dequeue fills up, this allocates a new one and only ever pushes to
+// dequeue fills up, this allocates a New one and only ever pushes to
 // the latest dequeue. Pops happen from the other end of the list and
 // once a dequeue is exhausted, it gets removed from the list.
 type bufChain struct {
@@ -539,7 +522,7 @@ startPush:
 		return
 	}
 
-	// The current dequeue is full. Allocate a new one of twice
+	// The current dequeue is full. Allocate a New one of twice
 	// the size.
 	if atomic.CompareAndSwapUint32(&c.newChain, 0, 1) {
 		newSize := len(d.vals) * 2

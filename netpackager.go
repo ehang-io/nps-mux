@@ -6,24 +6,24 @@ import (
 	"io"
 )
 
-type BasePackager struct {
-	Length  uint16
-	Content []byte
+type basePackager struct {
+	length  uint16
+	content []byte
 }
 
-func (Self *BasePackager) Set(content []byte) (err error) {
+func (Self *basePackager) Set(content []byte) (err error) {
 	Self.reset()
 	if content != nil {
 		n := len(content)
 		if n == 0 {
 			err = errors.New("mux:packer: newpack content is zero length")
 		}
-		if n > MaximumSegmentSize {
+		if n > maximumSegmentSize {
 			err = errors.New("mux:packer: newpack content segment too large")
 			return
 		}
-		Self.Content = Self.Content[:n]
-		copy(Self.Content, content)
+		Self.content = Self.content[:n]
+		copy(Self.content, content)
 	} else {
 		err = errors.New("mux:packer: newpack content is nil")
 	}
@@ -31,112 +31,111 @@ func (Self *BasePackager) Set(content []byte) (err error) {
 	return
 }
 
-func (Self *BasePackager) Pack(writer io.Writer) (err error) {
-	err = binary.Write(writer, binary.LittleEndian, Self.Length)
+func (Self *basePackager) Pack(writer io.Writer) (err error) {
+	err = binary.Write(writer, binary.LittleEndian, Self.length)
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.LittleEndian, Self.Content)
+	err = binary.Write(writer, binary.LittleEndian, Self.content)
 	return
 }
 
-func (Self *BasePackager) UnPack(reader io.Reader) (n uint16, err error) {
+func (Self *basePackager) UnPack(reader io.Reader) (n uint16, err error) {
 	Self.reset()
 	n += 2 // uint16
-	err = binary.Read(reader, binary.LittleEndian, &Self.Length)
+	err = binary.Read(reader, binary.LittleEndian, &Self.length)
 	if err != nil {
 		return
 	}
-	if int(Self.Length) > cap(Self.Content) {
+	if int(Self.length) > cap(Self.content) {
 		err = errors.New("mux:packer: unpack err, content length too large")
 		return
 	}
-	if Self.Length > MaximumSegmentSize {
+	if Self.length > maximumSegmentSize {
 		err = errors.New("mux:packer: unpack content segment too large")
 		return
 	}
-	Self.Content = Self.Content[:int(Self.Length)]
-	err = binary.Read(reader, binary.LittleEndian, Self.Content)
-	n += Self.Length
+	Self.content = Self.content[:int(Self.length)]
+	err = binary.Read(reader, binary.LittleEndian, Self.content)
+	n += Self.length
 	return
 }
 
-func (Self *BasePackager) setLength() {
-	Self.Length = uint16(len(Self.Content))
+func (Self *basePackager) setLength() {
+	Self.length = uint16(len(Self.content))
 	return
 }
 
-func (Self *BasePackager) reset() {
-	Self.Length = 0
-	Self.Content = Self.Content[:0] // reset length
+func (Self *basePackager) reset() {
+	Self.length = 0
+	Self.content = Self.content[:0] // reset length
 }
 
-type MuxPackager struct {
-	Flag         uint8
-	Id           int32
-	RemainLength uint32
-	BasePackager
+type muxPackager struct {
+	flag         uint8
+	id           int32
+	remainLength uint32
+	basePackager
 }
 
-func (Self *MuxPackager) Set(flag uint8, id int32, content interface{}) (err error) {
-	Self.Flag = flag
-	Self.Id = id
+func (Self *muxPackager) Set(flag uint8, id int32, content interface{}) (err error) {
+	Self.flag = flag
+	Self.id = id
 	switch flag {
-	case MuxPingFlag, MuxPingReturn, MuxNewMsg, MuxNewMsgPart:
-		Self.Content = WindowBuff.Get()
-		err = Self.BasePackager.Set(content.([]byte))
-		//logs.Warn(Self.Length, string(Self.Content))
-	case MuxMsgSendOk:
+	case muxPingFlag, muxPingReturn, muxNewMsg, muxNewMsgPart:
+		Self.content = windowBuff.Get()
+		err = Self.basePackager.Set(content.([]byte))
+	case muxMsgSendOk:
 		// MUX_MSG_SEND_OK contains uint32 data
-		Self.RemainLength = content.(uint32)
+		Self.remainLength = content.(uint32)
 	}
 	return
 }
 
-func (Self *MuxPackager) Pack(writer io.Writer) (err error) {
-	err = binary.Write(writer, binary.LittleEndian, Self.Flag)
+func (Self *muxPackager) Pack(writer io.Writer) (err error) {
+	err = binary.Write(writer, binary.LittleEndian, Self.flag)
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.LittleEndian, Self.Id)
+	err = binary.Write(writer, binary.LittleEndian, Self.id)
 	if err != nil {
 		return
 	}
-	switch Self.Flag {
-	case MuxNewMsg, MuxNewMsgPart, MuxPingFlag, MuxPingReturn:
-		err = Self.BasePackager.Pack(writer)
-		WindowBuff.Put(Self.Content)
-	case MuxMsgSendOk:
-		err = binary.Write(writer, binary.LittleEndian, Self.RemainLength)
+	switch Self.flag {
+	case muxNewMsg, muxNewMsgPart, muxPingFlag, muxPingReturn:
+		err = Self.basePackager.Pack(writer)
+		windowBuff.Put(Self.content)
+	case muxMsgSendOk:
+		err = binary.Write(writer, binary.LittleEndian, Self.remainLength)
 	}
 	return
 }
 
-func (Self *MuxPackager) UnPack(reader io.Reader) (n uint16, err error) {
-	err = binary.Read(reader, binary.LittleEndian, &Self.Flag)
+func (Self *muxPackager) UnPack(reader io.Reader) (n uint16, err error) {
+	err = binary.Read(reader, binary.LittleEndian, &Self.flag)
 	if err != nil {
 		return
 	}
-	err = binary.Read(reader, binary.LittleEndian, &Self.Id)
+	err = binary.Read(reader, binary.LittleEndian, &Self.id)
 	if err != nil {
 		return
 	}
-	switch Self.Flag {
-	case MuxNewMsg, MuxNewMsgPart, MuxPingFlag, MuxPingReturn:
-		Self.Content = WindowBuff.Get() // need get a window buf from pool
-		n, err = Self.BasePackager.UnPack(reader)
-	case MuxMsgSendOk:
-		err = binary.Read(reader, binary.LittleEndian, &Self.RemainLength)
+	switch Self.flag {
+	case muxNewMsg, muxNewMsgPart, muxPingFlag, muxPingReturn:
+		Self.content = windowBuff.Get() // need Get a window buf from pool
+		n, err = Self.basePackager.UnPack(reader)
+	case muxMsgSendOk:
+		err = binary.Read(reader, binary.LittleEndian, &Self.remainLength)
 		n += 4 // uint32
 	}
 	n += 5 //uint8 int32
 	return
 }
 
-func (Self *MuxPackager) Reset() {
-	Self.Id = 0
-	Self.Flag = 0
-	Self.Length = 0
-	Self.Content = nil
-	Self.RemainLength = 0
+func (Self *muxPackager) reset() {
+	Self.id = 0
+	Self.flag = 0
+	Self.length = 0
+	Self.content = nil
+	Self.remainLength = 0
 }

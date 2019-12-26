@@ -13,25 +13,23 @@ import (
 
 type conn struct {
 	net.Conn
-	getStatusCh      chan struct{}
 	connStatusOkCh   chan struct{}
 	connStatusFailCh chan struct{}
 	connId           int32
 	isClose          bool
-	closeFlag        bool // close conn flag
-	receiveWindow    *ReceiveWindow
-	sendWindow       *SendWindow
+	closingFlag      bool // closing conn flag
+	receiveWindow    *receiveWindow
+	sendWindow       *sendWindow
 	once             sync.Once
 }
 
 func NewConn(connId int32, mux *Mux) *conn {
 	c := &conn{
-		getStatusCh:      make(chan struct{}),
 		connStatusOkCh:   make(chan struct{}),
 		connStatusFailCh: make(chan struct{}),
 		connId:           connId,
-		receiveWindow:    new(ReceiveWindow),
-		sendWindow:       new(SendWindow),
+		receiveWindow:    new(receiveWindow),
+		sendWindow:       new(sendWindow),
 		once:             sync.Once{},
 	}
 	c.receiveWindow.New(mux)
@@ -55,14 +53,12 @@ func (s *conn) Write(buf []byte) (n int, err error) {
 	if s.isClose {
 		return 0, errors.New("the conn has closed")
 	}
-	if s.closeFlag {
-		//s.Close()
+	if s.closingFlag {
 		return 0, errors.New("io: write on closed conn")
 	}
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	//logs.Warn("write buf", len(buf))
 	n, err = s.sendWindow.WriteFull(buf, s.connId)
 	return
 }
@@ -76,9 +72,9 @@ func (s *conn) closeProcess() {
 	s.isClose = true
 	s.receiveWindow.mux.connMap.Delete(s.connId)
 	if !s.receiveWindow.mux.IsClose {
-		// if server or user close the conn while reading, will get a io.EOF
+		// if server or user close the conn while reading, will Get a io.EOF
 		// and this Close method will be invoke, send this signal to close other side
-		s.receiveWindow.mux.sendInfo(MuxConnClose, s.connId, nil)
+		s.receiveWindow.mux.sendInfo(muxConnClose, s.connId, nil)
 	}
 	s.sendWindow.CloseWindow()
 	s.receiveWindow.CloseWindow()
@@ -143,24 +139,24 @@ func (Self *window) CloseWindow() {
 	}
 }
 
-type ReceiveWindow struct {
+type receiveWindow struct {
 	window
-	bufQueue ReceiveWindowQueue
-	element  *ListElement
+	bufQueue receiveWindowQueue
+	element  *listElement
 	count    int8
 	once     sync.Once
 }
 
-func (Self *ReceiveWindow) New(mux *Mux) {
+func (Self *receiveWindow) New(mux *Mux) {
 	// initial a window for receive
 	Self.bufQueue.New()
-	Self.element = ListElementPool.Get()
-	Self.maxSize = MaximumSegmentSize * 10
+	Self.element = listEle.Get()
+	Self.maxSize = maximumSegmentSize * 10
 	Self.mux = mux
 	Self.window.New()
 }
 
-func (Self *ReceiveWindow) remainingSize(delta uint16) (n uint32) {
+func (Self *receiveWindow) remainingSize(delta uint16) (n uint32) {
 	// receive window remaining
 	l := int64(atomic.LoadUint32(&Self.maxSize)) - int64(Self.bufQueue.Len())
 	l -= int64(delta)
@@ -170,15 +166,14 @@ func (Self *ReceiveWindow) remainingSize(delta uint16) (n uint32) {
 	return
 }
 
-func (Self *ReceiveWindow) calcSize() {
+func (Self *receiveWindow) calcSize() {
 	// calculating maximum receive window size
 	if Self.count == 0 {
-		//logs.Warn("ping, bw", Self.mux.latency, Self.bw.Get())
 		conns := Self.mux.connMap.Size()
 		n := uint32(math.Float64frombits(atomic.LoadUint64(&Self.mux.latency)) *
 			Self.mux.bw.Get() / float64(conns))
-		if n < MaximumSegmentSize*10 {
-			n = MaximumSegmentSize * 10
+		if n < maximumSegmentSize*10 {
+			n = maximumSegmentSize * 10
 		}
 		bufLen := Self.bufQueue.Len()
 		if n < bufLen {
@@ -187,15 +182,14 @@ func (Self *ReceiveWindow) calcSize() {
 		if n < Self.maxSize/2 {
 			n = Self.maxSize / 2
 		}
-		// set the minimal size
+		// Set the minimal size
 		if n > 2*Self.maxSize {
 			n = 2 * Self.maxSize
 		}
-		if n > (MaximumWindowSize / uint32(conns)) {
-			n = MaximumWindowSize / uint32(conns)
+		if n > (maximumWindowSize / uint32(conns)) {
+			n = maximumWindowSize / uint32(conns)
 		}
-		// set the maximum size
-		//logs.Warn("n", n)
+		// Set the maximum size
 		atomic.StoreUint32(&Self.maxSize, n)
 		Self.count = -10
 	}
@@ -203,12 +197,11 @@ func (Self *ReceiveWindow) calcSize() {
 	return
 }
 
-func (Self *ReceiveWindow) Write(buf []byte, l uint16, part bool, id int32) (err error) {
+func (Self *receiveWindow) Write(buf []byte, l uint16, part bool, id int32) (err error) {
 	if Self.closeOp {
 		return errors.New("conn.receiveWindow: write on closed window")
 	}
-	element, err := NewListElement(buf, l, part)
-	//logs.Warn("push the buf", len(buf), l, (&element).l)
+	element, err := newListElement(buf, l, part)
 	if err != nil {
 		return
 	}
@@ -220,7 +213,6 @@ start:
 	newRemaining := Self.remainingSize(l)
 	// calculate the remaining window size now, plus the element we will push
 	if newRemaining == 0 {
-		//logs.Warn("window full true", remaining)
 		wait = 1
 	}
 	if !atomic.CompareAndSwapUint64(&Self.remainingWait, ptrs, Self.pack(0, wait)) {
@@ -230,48 +222,43 @@ start:
 	Self.bufQueue.Push(element)
 	// status check finish, now we can push the element into the queue
 	if wait == 0 {
-		Self.mux.sendInfo(MuxMsgSendOk, id, newRemaining)
+		Self.mux.sendInfo(muxMsgSendOk, id, newRemaining)
 		// send the remaining window size, not including zero size
 	}
 	return nil
 }
 
-func (Self *ReceiveWindow) Read(p []byte, id int32) (n int, err error) {
+func (Self *receiveWindow) Read(p []byte, id int32) (n int, err error) {
 	if Self.closeOp {
 		return 0, io.EOF // receive close signal, returns eof
 	}
 	pOff := 0
 	l := 0
-	//logs.Warn("receive window read off, element.l", Self.off, Self.element.l)
 copyData:
 	if Self.off == uint32(Self.element.L) {
 		// on the first Read method invoked, Self.off and Self.element.l
 		// both zero value
-		ListElementPool.Put(Self.element)
+		listEle.Put(Self.element)
 		if Self.closeOp {
 			return 0, io.EOF
 		}
 		Self.element, err = Self.bufQueue.Pop()
 		// if the queue is empty, Pop method will wait until one element push
 		// into the queue successful, or timeout.
-		// timer start on timeout parameter is set up ,
-		// reset to 60s if timeout and data still available
+		// timer start on timeout parameter is Set up
 		Self.off = 0
 		if err != nil {
 			Self.CloseWindow() // also close the window, to avoid read twice
 			return             // queue receive stop or time out, break the loop and return
 		}
-		//logs.Warn("pop element", Self.element.l, Self.element.part)
 	}
 	l = copy(p[pOff:], Self.element.Buf[Self.off:Self.element.L])
 	pOff += l
 	Self.off += uint32(l)
-	//logs.Warn("window read length buf len", Self.readLength, Self.bufQueue.Len())
 	n += l
 	l = 0
 	if Self.off == uint32(Self.element.L) {
-		//logs.Warn("put the element end ", string(Self.element.buf[:15]))
-		WindowBuff.Put(Self.element.Buf)
+		windowBuff.Put(Self.element.Buf)
 		Self.sendStatus(id, Self.element.L)
 		// check the window full status
 	}
@@ -282,7 +269,7 @@ copyData:
 	return // buf p is full or all of segments in buf, return
 }
 
-func (Self *ReceiveWindow) sendStatus(id int32, l uint16) {
+func (Self *receiveWindow) sendStatus(id int32, l uint16) {
 	var remaining, wait uint32
 	for {
 		ptrs := atomic.LoadUint64(&Self.remainingWait)
@@ -295,72 +282,65 @@ func (Self *ReceiveWindow) sendStatus(id int32, l uint16) {
 		// another goroutine change remaining or wait status, make sure
 		// we need acknowledge other side
 	}
-	// now we get the current window status success
+	// now we Get the current window status success
 	if wait == 1 {
-		//logs.Warn("send the wait status", remaining)
-		Self.mux.sendInfo(MuxMsgSendOk, id, remaining)
+		Self.mux.sendInfo(muxMsgSendOk, id, remaining)
 	}
 	return
 }
 
-func (Self *ReceiveWindow) SetTimeOut(t time.Time) {
+func (Self *receiveWindow) SetTimeOut(t time.Time) {
 	// waiting for FIFO queue Pop method
 	Self.bufQueue.SetTimeOut(t)
 }
 
-func (Self *ReceiveWindow) Stop() {
+func (Self *receiveWindow) Stop() {
 	// queue has no more data to push, so unblock pop method
 	Self.once.Do(Self.bufQueue.Stop)
 }
 
-func (Self *ReceiveWindow) CloseWindow() {
+func (Self *receiveWindow) CloseWindow() {
 	Self.window.CloseWindow()
 	Self.Stop()
 	Self.release()
 }
 
-func (Self *ReceiveWindow) release() {
-	//if Self.element != nil {
-	//	if Self.element.Buf != nil {
-	//		common.WindowBuff.Put(Self.element.Buf)
-	//	}
-	//	common.ListElementPool.Put(Self.element)
-	//}
+func (Self *receiveWindow) release() {
 	for {
 		ele := Self.bufQueue.TryPop()
 		if ele == nil {
-			return
+			break
 		}
 		if ele.Buf != nil {
-			WindowBuff.Put(ele.Buf)
+			windowBuff.Put(ele.Buf)
 		}
-		ListElementPool.Put(ele)
+		listEle.Put(ele)
 	} // release resource
 }
 
-type SendWindow struct {
+type sendWindow struct {
 	window
 	buf       []byte
 	setSizeCh chan struct{}
 	timeout   time.Time
 }
 
-func (Self *SendWindow) New(mux *Mux) {
+func (Self *sendWindow) New(mux *Mux) {
 	Self.setSizeCh = make(chan struct{})
-	Self.maxSize = MaximumSegmentSize * 10
-	atomic.AddUint64(&Self.remainingWait, uint64(MaximumSegmentSize*10)<<dequeueBits)
+	Self.maxSize = maximumSegmentSize * 10
+	atomic.AddUint64(&Self.remainingWait, uint64(maximumSegmentSize*10)<<dequeueBits)
 	Self.mux = mux
 	Self.window.New()
 }
 
-func (Self *SendWindow) SetSendBuf(buf []byte) {
-	// send window buff from conn write method, set it to send window
+func (Self *sendWindow) SetSendBuf(buf []byte) {
+	// send window buff from conn write method, Set it to send window
 	Self.buf = buf
 	Self.off = 0
 }
 
-func (Self *SendWindow) SetSize(newRemaining uint32) (closed bool) {
-	// set the window size from receive window
+func (Self *sendWindow) SetSize(newRemaining uint32) (closed bool) {
+	// Set the window size from receive window
 	defer func() {
 		if recover() != nil {
 			closed = true
@@ -370,7 +350,6 @@ func (Self *SendWindow) SetSize(newRemaining uint32) (closed bool) {
 		close(Self.setSizeCh)
 		return true
 	}
-	//logs.Warn("set send window size to ", windowSize, newRemaining)
 	var remaining, wait, newWait uint32
 	for {
 		ptrs := atomic.LoadUint64(&Self.remainingWait)
@@ -390,17 +369,15 @@ func (Self *SendWindow) SetSize(newRemaining uint32) (closed bool) {
 	}
 	if wait == 1 {
 		// send window into the wait status, need notice the channel
-		//logs.Warn("send window remaining size is 0")
 		Self.allow()
 	}
 	// send window not into the wait status, so just do slide
 	return false
 }
 
-func (Self *SendWindow) allow() {
+func (Self *sendWindow) allow() {
 	select {
 	case Self.setSizeCh <- struct{}{}:
-		//logs.Warn("send window remaining size is 0 finish")
 		return
 	case <-Self.closeOpCh:
 		close(Self.setSizeCh)
@@ -408,11 +385,11 @@ func (Self *SendWindow) allow() {
 	}
 }
 
-func (Self *SendWindow) sent(sentSize uint32) {
+func (Self *sendWindow) sent(sentSize uint32) {
 	atomic.AddUint64(&Self.remainingWait, ^(uint64(sentSize)<<dequeueBits - 1))
 }
 
-func (Self *SendWindow) WriteTo() (p []byte, sendSize uint32, part bool, err error) {
+func (Self *sendWindow) WriteTo() (p []byte, sendSize uint32, part bool, err error) {
 	// returns buf segments, return only one segments, need a loop outside
 	// until err = io.EOF
 	if Self.closeOp {
@@ -420,7 +397,7 @@ func (Self *SendWindow) WriteTo() (p []byte, sendSize uint32, part bool, err err
 	}
 	if Self.off == uint32(len(Self.buf)) {
 		return nil, 0, false, io.EOF
-		// send window buff is drain, return eof and get another one
+		// send window buff is drain, return eof and Get another one
 	}
 	var remaining uint32
 start:
@@ -431,19 +408,15 @@ start:
 			goto start // another goroutine change the window, try again
 		}
 		// into the wait status
-		//logs.Warn("send window into wait status")
 		err = Self.waitReceiveWindow()
 		if err != nil {
 			return nil, 0, false, err
 		}
-		//logs.Warn("rem into wait finish")
 		goto start
 	}
 	// there are still remaining window
-	//logs.Warn("rem", remaining)
-	if len(Self.buf[Self.off:]) > MaximumSegmentSize {
-		sendSize = MaximumSegmentSize
-		//logs.Warn("cut buf by mss")
+	if len(Self.buf[Self.off:]) > maximumSegmentSize {
+		sendSize = maximumSegmentSize
 	} else {
 		sendSize = uint32(len(Self.buf[Self.off:]))
 	}
@@ -451,9 +424,7 @@ start:
 		// usable window size is small than
 		// window MAXIMUM_SEGMENT_SIZE or send buf left
 		sendSize = remaining
-		//logs.Warn("cut buf by remainingsize", sendSize, len(Self.buf[Self.off:]))
 	}
-	//logs.Warn("send size", sendSize)
 	if sendSize < uint32(len(Self.buf[Self.off:])) {
 		part = true
 	}
@@ -463,9 +434,9 @@ start:
 	return
 }
 
-func (Self *SendWindow) waitReceiveWindow() (err error) {
+func (Self *sendWindow) waitReceiveWindow() (err error) {
 	t := Self.timeout.Sub(time.Now())
-	if t < 0 { // not set the timeout, wait for it as long as connection close
+	if t < 0 { // not Set the timeout, wait for it as long as connection close
 		select {
 		case _, ok := <-Self.setSizeCh:
 			if !ok {
@@ -492,16 +463,14 @@ func (Self *SendWindow) waitReceiveWindow() (err error) {
 	}
 }
 
-func (Self *SendWindow) WriteFull(buf []byte, id int32) (n int, err error) {
-	Self.SetSendBuf(buf) // set the buf to send window
-	//logs.Warn("set the buf to send window")
+func (Self *sendWindow) WriteFull(buf []byte, id int32) (n int, err error) {
+	Self.SetSendBuf(buf) // Set the buf to send window
 	var bufSeg []byte
 	var part bool
 	var l uint32
 	for {
 		bufSeg, l, part, err = Self.WriteTo()
-		//logs.Warn("buf seg", len(bufSeg), part, err)
-		// get the buf segments from send window
+		// Get the buf segments from send window
 		if bufSeg == nil && part == false && err == io.EOF {
 			// send window is drain, break the loop
 			err = nil
@@ -513,18 +482,16 @@ func (Self *SendWindow) WriteFull(buf []byte, id int32) (n int, err error) {
 		n += int(l)
 		l = 0
 		if part {
-			Self.mux.sendInfo(MuxNewMsgPart, id, bufSeg)
+			Self.mux.sendInfo(muxNewMsgPart, id, bufSeg)
 		} else {
-			Self.mux.sendInfo(MuxNewMsg, id, bufSeg)
-			//logs.Warn("buf seg sent", len(bufSeg), part, err)
+			Self.mux.sendInfo(muxNewMsg, id, bufSeg)
 		}
 		// send to other side, not send nil data to other side
 	}
-	//logs.Warn("buf seg write success")
 	return
 }
 
-func (Self *SendWindow) SetTimeOut(t time.Time) {
+func (Self *sendWindow) SetTimeOut(t time.Time) {
 	// waiting for receive a receive window size
 	Self.timeout = t
 }
