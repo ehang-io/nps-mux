@@ -2,7 +2,10 @@ package nps_mux
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"github.com/cnlh/nps/lib/common"
+	"github.com/cnlh/nps/lib/goroutine"
 	"io"
 	"log"
 	"net"
@@ -20,6 +23,57 @@ import (
 var conn1 net.Conn
 var conn2 net.Conn
 
+func TestNewMux2(t *testing.T) {
+	tc, err := NewTrafficControl("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tc.RunNetRangeTest(func() {
+		logs.EnableFuncCallDepth(true)
+		logs.SetLogFuncCallDepth(3)
+		server()
+		client()
+		//poolConnCopy, _ := ants.NewPoolWithFunc(200000, common.copyConn, ants.WithNonblocking(false))
+		time.Sleep(time.Second * 3)
+		rate := NewRate(1024 * 1024 * 3)
+		rate.Start()
+		conn2 = NewRateConn(rate, conn2)
+		go func() {
+			m2 := NewMux(conn2, "tcp")
+			for {
+				//logs.Warn("npc starting accept")
+				c, err := m2.Accept()
+				if err != nil {
+					logs.Warn(err)
+					continue
+				}
+				//logs.Warn("npc accept success ")
+				//c2, err := net.Dial("tcp", "127.0.0.1:80")
+				c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
+			}
+		}()
+
+		m1 := NewMux(conn1, "tcp")
+		tmpCpnn, err := m1.NewConn()
+		if err != nil {
+			logs.Warn("nps new conn err ", err)
+			return
+		}
+		buf := make([]byte, 1024*1024)
+		var count float64
+		start := time.Now()
+		defer logs.Warn("now rate", count/time.Now().Sub(start).Seconds())
+		for {
+			n, err := tmpCpnn.Read(buf)
+			count += float64(n)
+			if err != nil {
+				logs.Warn(err)
+				return
+			}
+		}
+	})
+	logs.Warning(err.Error())
+}
 func TestNewMux(t *testing.T) {
 	go func() {
 		http.ListenAndServe("0.0.0.0:8889", nil)
