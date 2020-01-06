@@ -41,7 +41,6 @@ func TestNewMux2(t *testing.T) {
 		go func() {
 			m2 := NewMux(conn2, "tcp")
 			for {
-				//logs.Warn("npc starting accept")
 				c, err := m2.Accept()
 				if err != nil {
 					logs.Warn(err)
@@ -49,7 +48,10 @@ func TestNewMux2(t *testing.T) {
 				}
 				//logs.Warn("npc accept success ")
 				//c2, err := net.Dial("tcp", "127.0.0.1:80")
-				c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
+				go func() {
+					c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
+					c.Close()
+				}()
 			}
 		}()
 
@@ -61,16 +63,17 @@ func TestNewMux2(t *testing.T) {
 		}
 		buf := make([]byte, 1024*1024)
 		var count float64
+		count = 0
 		start := time.Now()
-		defer logs.Warn("now rate", count/time.Now().Sub(start).Seconds())
 		for {
 			n, err := tmpCpnn.Read(buf)
 			count += float64(n)
 			if err != nil {
 				logs.Warn(err)
-				return
+				break
 			}
 		}
+		logs.Warn("now rate", count/time.Now().Sub(start).Seconds()/1024/1024)
 	})
 	logs.Warning(err.Error())
 }
