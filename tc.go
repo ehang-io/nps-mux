@@ -56,7 +56,7 @@ func GetIpAddrByName(EthName string) (eth *Eth, err error) {
 		}
 		if byName.Name == EthName || EthName == "" {
 			// except lo
-			if !strings.Contains(byName.Name, "Loopback") && !strings.Contains(byName.Name, "isatap") {
+			if !strings.Contains(byName.Name, "Loopback") && !strings.Contains(byName.Name, "isatap") && !strings.Contains(byName.Name, "lo") {
 				addresses, _ := byName.Addrs()
 				for _, v := range addresses {
 					ipMask := strings.Split(v.String(), "/")
