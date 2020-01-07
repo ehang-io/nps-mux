@@ -1,4 +1,4 @@
-module github.com/ffdfgdfg/nps-mux
+module ehang.io/nps-mux
 
 go 1.13
 
