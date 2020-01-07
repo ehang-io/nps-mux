@@ -109,6 +109,7 @@ func (tc *TrafficControl) RunNetRangeTest(f func()) error {
 	funcs := tc.getTestVariable()
 	groups := getArrayExhaustivity(funcs)
 	for _, v := range groups {
+		tc.del()
 		// execute bandwidth control, not good work
 		//if err := tc.bandwidth("1mbit"); err != nil {
 		//	return err
