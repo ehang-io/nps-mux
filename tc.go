@@ -2,6 +2,7 @@ package nps_mux
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"os/exec"
@@ -180,6 +181,7 @@ func (tc *TrafficControl) bandwidth(bw string) error {
 }
 
 func runCmd(cmd *exec.Cmd) error {
+	fmt.Println("run cmd:", cmd.Args)
 	err := cmd.Run()
 	if err != nil {
 		return err
