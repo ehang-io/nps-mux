@@ -167,7 +167,7 @@ func (tc *TrafficControl) corrupt(opt, corruptRatio string) {
 }
 
 func (tc *TrafficControl) Run() error {
-	tc.params = append(tc.params, []string{"qdisc", "add", "dev", tc.Eth.EthName, "root", "netem",}...)
+	tc.params = append([]string{"qdisc", "add", "dev", tc.Eth.EthName, "root", "netem",}, tc.params...)
 	return runCmd(exec.Command("tc", tc.params...))
 }
 

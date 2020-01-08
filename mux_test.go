@@ -31,8 +31,8 @@ func TestNewMux2(t *testing.T) {
 	err = tc.RunNetRangeTest(func() {
 		logs.EnableFuncCallDepth(true)
 		logs.SetLogFuncCallDepth(3)
-		server()
-		client()
+		server(tc.Eth.EthAddr)
+		client(tc.Eth.EthAddr)
 		//poolConnCopy, _ := ants.NewPoolWithFunc(200000, common.copyConn, ants.WithNonblocking(false))
 		time.Sleep(time.Second * 3)
 		rate := NewRate(1024 * 1024 * 3)
@@ -46,8 +46,6 @@ func TestNewMux2(t *testing.T) {
 					logs.Warn(err)
 					continue
 				}
-				//logs.Warn("npc accept success ")
-				//c2, err := net.Dial("tcp", "127.0.0.1:80")
 				go func() {
 					c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
 					c.Close()
@@ -83,8 +81,8 @@ func TestNewMux(t *testing.T) {
 	}()
 	logs.EnableFuncCallDepth(true)
 	logs.SetLogFuncCallDepth(3)
-	server()
-	client()
+	server("")
+	client("")
 	//poolConnCopy, _ := ants.NewPoolWithFunc(200000, common.copyConn, ants.WithNonblocking(false))
 	time.Sleep(time.Second * 3)
 	go func() {
@@ -197,9 +195,12 @@ func TestNewMux(t *testing.T) {
 	}
 }
 
-func server() {
+func server(ip string) {
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
 	var err error
-	l, err := net.Listen("tcp", "127.0.0.1:9999")
+	l, err := net.Listen("tcp", ip+":9999")
 	if err != nil {
 		logs.Warn(err)
 	}
@@ -212,9 +213,12 @@ func server() {
 	return
 }
 
-func client() {
+func client(ip string) {
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
 	var err error
-	conn2, err = net.Dial("tcp", "127.0.0.1:9999")
+	conn2, err = net.Dial("tcp", ip+":9999")
 	if err != nil {
 		logs.Warn(err)
 	}
@@ -360,93 +364,6 @@ func TestChain(t *testing.T) {
 	time.Sleep(time.Second * 100000)
 }
 
-func TestFIFO(t *testing.T) {
-	go func() {
-		log.Println(http.ListenAndServe("0.0.0.0:8889", nil))
-	}()
-	logs.EnableFuncCallDepth(true)
-	logs.SetLogFuncCallDepth(3)
-	time.Sleep(time.Second * 5)
-	d := new(receiveWindowQueue)
-	d.New()
-	go func() {
-		time.Sleep(time.Second)
-		for i := 0; i < 1001; i++ {
-			data, err := d.Pop()
-			if err == nil {
-				//fmt.Println(i, string(data.buf), err)
-				logs.Warn(i, string(data.Buf), err)
-				common.ListElementPool.Put(data)
-			} else {
-				//fmt.Println("err", err)
-				logs.Warn("err", err)
-			}
-			//logs.Warn(d.Len())
-		}
-		logs.Warn("pop finish")
-	}()
-	go func() {
-		time.Sleep(time.Second * 10)
-		for i := 0; i < 1000; i++ {
-			by := []byte("test " + strconv.Itoa(i) + " ") //
-			data, _ := newListElement(by, uint16(len(by)), true)
-			//fmt.Println(string((*data).buf), data)
-			//logs.Warn(string((*data).buf), data)
-			d.Push(data)
-		}
-	}()
-	time.Sleep(time.Second * 100000)
-}
-
-func TestPriority(t *testing.T) {
-	go func() {
-		log.Println(http.ListenAndServe("0.0.0.0:8889", nil))
-	}()
-	logs.EnableFuncCallDepth(true)
-	logs.SetLogFuncCallDepth(3)
-	time.Sleep(time.Second * 5)
-	d := new(priorityQueue)
-	d.New()
-	go func() {
-		time.Sleep(time.Second)
-		for i := 0; i < 360050; i++ {
-			data := d.Pop()
-			//fmt.Println(i, string(data.buf), err)
-			logs.Warn(i, string(data.content), data)
-		}
-		logs.Warn("pop finish")
-	}()
-	go func() {
-		time.Sleep(time.Second * 10)
-		for i := 0; i < 30000; i++ {
-			go func(i int) {
-				for n := 0; n < 10; n++ {
-					data := new(common.MuxPackager)
-					by := []byte("test " + strconv.Itoa(i) + strconv.Itoa(n))
-					_ = data.NewPac(common.MUX_NEW_MSG_PART, int32(i), by)
-					//fmt.Println(string((*data).buf), data)
-					logs.Warn(string((*data).Content), data)
-					d.Push(data)
-				}
-			}(i)
-			go func(i int) {
-				data := new(common.MuxPackager)
-				_ = data.NewPac(common.MUX_NEW_CONN, int32(i), nil)
-				//fmt.Println(string((*data).buf), data)
-				logs.Warn(data)
-				d.Push(data)
-			}(i)
-			go func(i int) {
-				data := new(common.MuxPackager)
-				_ = data.NewPac(common.MUX_NEW_CONN_OK, int32(i), nil)
-				//fmt.Println(string((*data).buf), data)
-				logs.Warn(data)
-				d.Push(data)
-			}(i)
-		}
-	}()
-	time.Sleep(time.Second * 100000)
-}
 
 //func TestReceive(t *testing.T) {
 //	go func() {
