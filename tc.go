@@ -15,7 +15,8 @@ type Eth struct {
 }
 
 type TrafficControl struct {
-	Eth *Eth
+	Eth    *Eth
+	params string
 }
 
 func Ips() (map[string]string, error) {
@@ -75,7 +76,7 @@ func GetIpAddrByName(EthName string) (eth *Eth, err error) {
 	return
 }
 
-type tcFunc func() error
+type tcFunc func()
 
 func getArrayExhaustivity(arr []tcFunc) (result [][]tcFunc) {
 	var l = int(math.Pow(float64(2), float64(len(arr))) - 1)
@@ -116,10 +117,11 @@ func (tc *TrafficControl) RunNetRangeTest(f func()) error {
 		//}
 		// execute random strategy
 		for _, vv := range v {
-			err := vv()
-			if err != nil {
-				return err
-			}
+			vv()
+		}
+		err := tc.Run()
+		if err != nil {
+			return err
 		}
 		// execute test func
 		f()
@@ -134,44 +136,42 @@ func (tc *TrafficControl) RunNetRangeTest(f func()) error {
 // create test variables
 func (tc *TrafficControl) getTestVariable() []tcFunc {
 	return []tcFunc{
-		func() error { return tc.delay("add", "100ms", "10ms", "30%") },
-		func() error { return tc.loss("add", "1%", "30%") },
-		func() error { return tc.duplicate("add", "1%") },
-		func() error { return tc.corrupt("add", "0.2%") },
-		func() error { return tc.reorder("change", "10ms", "25%", "50%") },
+		func() { tc.delay("add", "100ms", "10ms", "30%") },
+		func() { tc.loss("add", "1%", "30%") },
+		func() { tc.duplicate("add", "1%") },
+		func() { tc.corrupt("add", "0.2%") },
 	}
 }
 
 // this command sets the transmission of the network card to delayVal. At the same time,
 // about waveRatio of the packets will be delayed by ± wave.
-func (tc *TrafficControl) delay(opt, delayVal, wave, waveRatio string) error {
-	return runCmd(exec.Command("tc", "qdisc", opt, "dev", tc.Eth.EthName, "root", "netem", "delay", delayVal, wave, waveRatio))
+func (tc *TrafficControl) delay(opt, delayVal, wave, waveRatio string) {
+	tc.params += strings.Join([]string{" delay", delayVal, wave, waveRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly drop lossRatio of packets with a success rate of lossSuccessRatio.
-func (tc *TrafficControl) loss(opt, lossRatio, lossSuccessRatio string) error {
-	return runCmd(exec.Command("tc", "qdisc", opt, "dev", tc.Eth.EthName, "root", "netem", "loss", lossRatio, lossSuccessRatio))
+func (tc *TrafficControl) loss(opt, lossRatio, lossSuccessRatio string) {
+	tc.params += strings.Join([]string{" loss", lossRatio, lossSuccessRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly generate repeatRatio duplicate packets
-func (tc *TrafficControl) duplicate(opt, duplicateRatio string) error {
-	return runCmd(exec.Command("tc", "qdisc", opt, "dev", tc.Eth.EthName, "root", "netem", "duplicate", duplicateRatio))
+func (tc *TrafficControl) duplicate(opt, duplicateRatio string) {
+	tc.params += strings.Join([]string{" duplicate", duplicateRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly generate corruptRatio corrupted packets.
 // the kernel version must be above 2.6.16
-func (tc *TrafficControl) corrupt(opt, corruptRatio string) error {
-	return runCmd(exec.Command("tc", "qdisc", opt, "dev", tc.Eth.EthName, "root", "netem", "corrupt", corruptRatio))
+func (tc *TrafficControl) corrupt(opt, corruptRatio string) {
+	tc.params += strings.Join([]string{" corrupt", corruptRatio,}, " ")
 }
 
-// this command sets the transmission of the network card to: reorderRatio of the packets (reorderRelationRatio related)
-// will be sent immediately, and the other is delayed by delayVal
-func (tc *TrafficControl) reorder(opt, delayVal, reorderRatio, reorderRelationRatio string) error {
-	return runCmd(exec.Command("tc", "qdisc", opt, "dev", tc.Eth.EthName, "root", "netem", "delay", delayVal, "reorder", reorderRatio, reorderRelationRatio))
+func (tc *TrafficControl) Run() error {
+	return runCmd(exec.Command("tc", "qdisc", "add", "dev", tc.Eth.EthName, "root", "netem", tc.params))
 }
 
 // remove all tc setting
 func (tc *TrafficControl) del() error {
+	tc.params = ""
 	return runCmd(exec.Command("tc", "qdisc", "del", "dev", tc.Eth.EthName, "root"))
 }
 
