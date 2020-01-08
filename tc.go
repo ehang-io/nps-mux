@@ -146,23 +146,23 @@ func (tc *TrafficControl) getTestVariable() []tcFunc {
 // this command sets the transmission of the network card to delayVal. At the same time,
 // about waveRatio of the packets will be delayed by ± wave.
 func (tc *TrafficControl) delay(opt, delayVal, wave, waveRatio string) {
-	tc.params += strings.Join([]string{" delay", delayVal, wave, waveRatio,}, " ")
+	tc.params += strings.Join([]string{"delay", delayVal, wave, waveRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly drop lossRatio of packets with a success rate of lossSuccessRatio.
 func (tc *TrafficControl) loss(opt, lossRatio, lossSuccessRatio string) {
-	tc.params += strings.Join([]string{" loss", lossRatio, lossSuccessRatio,}, " ")
+	tc.params += strings.Join([]string{"loss", lossRatio, lossSuccessRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly generate repeatRatio duplicate packets
 func (tc *TrafficControl) duplicate(opt, duplicateRatio string) {
-	tc.params += strings.Join([]string{" duplicate", duplicateRatio,}, " ")
+	tc.params += strings.Join([]string{"duplicate", duplicateRatio,}, " ")
 }
 
 // this command sets the transmission of the network card to randomly generate corruptRatio corrupted packets.
 // the kernel version must be above 2.6.16
 func (tc *TrafficControl) corrupt(opt, corruptRatio string) {
-	tc.params += strings.Join([]string{" corrupt", corruptRatio,}, " ")
+	tc.params += strings.Join([]string{"corrupt", corruptRatio,}, " ")
 }
 
 func (tc *TrafficControl) Run() error {
