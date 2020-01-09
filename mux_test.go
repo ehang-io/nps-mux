@@ -8,11 +8,14 @@ import (
 	"github.com/cnlh/nps/lib/goroutine"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	_ "net/http/pprof"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -22,7 +25,215 @@ import (
 
 var conn1 net.Conn
 var conn2 net.Conn
+var clientIp = "172.18.0.5"
+var serverIp = "172.18.0.2"
+var appIp = "172.18.0.3"
+var userIp = "172.18.0.4"
+var bridgePort = "9999"
+var appPort = "9998"
+var serverPort = "9997"
+var appResultFileName = "app.txt"
+var userResultFileName = "user.txt"
+var serverResultFileName = "server.txt"
+var clientResultFileName = "client.txt"
 
+func writeResult(vals []string, outfile string) error {
+	file, err := os.Create(outfile)
+	if err != nil {
+		fmt.Println("writer", err)
+		return err
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	for _, v := range vals {
+		writer.WriteString(v)
+		writer.WriteString("\n")
+		writer.Flush()
+	}
+	return err
+}
+func TestServer(t *testing.T) {
+	tc, err := NewTrafficControl(serverIp)
+	if err != nil {
+		t.Fatal(err, tc)
+	}
+	// do some tc settings
+	// start bridge
+	bridgeListener, err := net.Listen("tcp", serverIp+":"+bridgePort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wait for client
+	clientBridgeConn, err := bridgeListener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientBridgeConn.Close()
+	// new mux
+	mux := NewMux(clientBridgeConn, "tcp")
+	// start server port
+	serverListener, err := net.Listen("tcp", serverIp+":"+serverPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverListener.Close()
+	for {
+		// accept user connection
+		userConn, err := serverListener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(userConn net.Conn) {
+			// create a conn from mux
+			clientConn, err := mux.NewConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			go io.Copy(userConn, clientConn)
+			go func() {
+				time.Sleep(time.Second * 10)
+				writeResult([]string{
+					strconv.Itoa(int(mux.bw.Get() / 1024 / 1024)),
+					strconv.Itoa(int(math.Float64frombits(atomic.LoadUint64(&mux.latency)))),
+				}, serverResultFileName)
+			}()
+			io.Copy(clientConn, userConn)
+		}(userConn)
+	}
+}
+func TestClient(t *testing.T) {
+	tc, err := NewTrafficControl(clientIp)
+	if err != nil {
+		t.Fatal(err, tc)
+	}
+	// do some tc settings
+	serverConn, err := net.Dial("tcp", serverIp+":"+bridgePort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// crete mux by serverConn
+	mux := NewMux(serverConn, "tcp")
+	// start accept user connection
+	for {
+		userConn, err := mux.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(userConn net.Conn) {
+			// connect to app
+			appConn, err := net.Dial("tcp", appIp+":"+appPort)
+			if err != nil {
+				t.Fatal()
+			}
+			defer appConn.Close()
+			defer userConn.Close()
+			go io.Copy(userConn, appConn)
+			go func() {
+				time.Sleep(time.Second * 10)
+				writeResult([]string{
+					strconv.Itoa(int(mux.bw.Get() / 1024 / 1024)),
+					strconv.Itoa(int(math.Float64frombits(atomic.LoadUint64(&mux.latency)))),
+				}, clientResultFileName)
+			}()
+			io.Copy(appConn, userConn)
+		}(userConn)
+	}
+}
+func TestApp(t *testing.T) {
+	tc, err := NewTrafficControl(appIp)
+	if err != nil {
+		t.Fatal(err, tc)
+	}
+	// do some tc settings
+	appListener, err := net.Listen("tcp", appIp+":"+appPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		userConn, err := appListener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(userConn net.Conn) {
+			b := bytes.Repeat([]byte{0,}, 1024)
+			startTime := time.Now()
+			// send 100mb data to user
+			for i := 0; i < 1024*100; i++ {
+				n, err := userConn.Write(b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fmt.Println("write len", n)
+				if n != 1024 {
+					t.Fatal("the write len is not right")
+				}
+			}
+			// send bandwidth
+			writeBw := 100 / time.Now().Sub(startTime).Seconds()
+			// get 100md from user
+			startTime = time.Now()
+			readLen := 0
+			for {
+				n, err := userConn.Read(b)
+				if err != nil {
+					log.Fatal(err)
+				}
+				readLen += n
+			}
+			if readLen != 1024*1024*100 {
+				t.Fatal("the read len is not right")
+			}
+			// read bandwidth
+			readBw := 100 / time.Now().Sub(startTime).Seconds()
+			// save result
+			err := writeResult([]string{strconv.Itoa(int(writeBw)), strconv.Itoa(int(readBw)),}, appResultFileName)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}(userConn)
+	}
+}
+func TestUser(t *testing.T) {
+	appConn, err := net.Dial("tcp", serverIp+":"+serverPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bytes.Repeat([]byte{0,}, 1024)
+	startTime := time.Now()
+	// get 100md from app
+	readLen := 0
+	for i := 0; i < 1024*100; i++ {
+		n, err := appConn.Read(b)
+		fmt.Println("read ", n)
+		if err != nil {
+			log.Fatal(err)
+		}
+		readLen += n
+	}
+	if readLen != 1024*1024*100 {
+		t.Fatal("the read len is not right", readLen)
+	}
+	// read bandwidth
+	readBw := 100 / time.Now().Sub(startTime).Seconds()
+	// send 100mb data to app
+	startTime = time.Now()
+	for i := 0; i < 1024*100; i++ {
+		n, err := appConn.Write(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1024 {
+			t.Fatal("the write len is not right")
+		}
+	}
+	// send bandwidth
+	writeBw := 100 / time.Now().Sub(startTime).Seconds()
+	// save result
+	err = writeResult([]string{strconv.Itoa(int(readBw)), strconv.Itoa(int(writeBw)),}, userResultFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 func TestNewMux2(t *testing.T) {
 	tc, err := NewTrafficControl("")
 	if err != nil {
@@ -66,6 +277,8 @@ func TestNewMux2(t *testing.T) {
 		for {
 			n, err := tmpCpnn.Read(buf)
 			count += float64(n)
+			logs.Warn(m1.bw.Get())
+			logs.Warn(uint32(math.Float64frombits(atomic.LoadUint64(&m1.latency))))
 			if err != nil {
 				logs.Warn(err)
 				break
@@ -363,7 +576,6 @@ func TestChain(t *testing.T) {
 	}()
 	time.Sleep(time.Second * 100000)
 }
-
 
 //func TestReceive(t *testing.T) {
 //	go func() {

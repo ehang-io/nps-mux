@@ -44,7 +44,7 @@ func Ips() (map[string]string, error) {
 }
 
 // get ip and Eth information by Eth name
-func GetIpAddrByName(EthName string) (eth *Eth, err error) {
+func GetEthByIp(ipAddr string) (eth *Eth, err error) {
 	var interfaces []net.Interface
 	interfaces, err = net.Interfaces()
 	if err != nil {
@@ -56,13 +56,13 @@ func GetIpAddrByName(EthName string) (eth *Eth, err error) {
 		if err != nil {
 			return
 		}
-		if byName.Name == EthName || EthName == "" {
-			// except lo
-			if !strings.Contains(byName.Name, "Loopback") && !strings.Contains(byName.Name, "isatap") && !strings.Contains(byName.Name, "lo") {
-				addresses, _ := byName.Addrs()
-				for _, v := range addresses {
-					ipMask := strings.Split(v.String(), "/")
-					if len(ipMask) == 2 {
+		// except lo
+		if !strings.Contains(byName.Name, "Loopback") && !strings.Contains(byName.Name, "isatap") && !strings.Contains(byName.Name, "lo") {
+			addresses, _ := byName.Addrs()
+			for _, v := range addresses {
+				ipMask := strings.Split(v.String(), "/")
+				if len(ipMask) == 2 {
+					if ipAddr == "" || ipMask[0] == ipAddr {
 						eth = new(Eth)
 						eth.EthAddr = ipMask[0]
 						eth.EthName = byName.Name
@@ -95,8 +95,8 @@ func getArrayExhaustivity(arr []tcFunc) (result [][]tcFunc) {
 	return
 }
 
-func NewTrafficControl(EthName string) (*TrafficControl, error) {
-	Eth, err := GetIpAddrByName(EthName)
+func NewTrafficControl(ipAddr string) (*TrafficControl, error) {
+	Eth, err := GetEthByIp(ipAddr)
 	if err != nil {
 		return nil, err
 	}
