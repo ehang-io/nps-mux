@@ -211,23 +211,28 @@ func newListElement(buf []byte, l uint16, part bool) (element *listElement, err 
 }
 
 type receiveWindowQueue struct {
+	lengthWait uint64
 	chain      *bufChain
 	stopOp     chan struct{}
 	readOp     chan struct{}
-	lengthWait uint64 // really strange ???? need Put here
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	// On non-Linux ARM, the 64-bit functions use instructions unavailable before the ARMv6k core.
 	// On ARM, x86-32, and 32-bit MIPS, it is the caller's responsibility
 	// to arrange for 64-bit alignment of 64-bit words accessed atomically.
 	// The first word in a variable or in an allocated struct, array, or slice can be relied upon to be 64-bit aligned.
+
+	// if there are implicit struct, careful the first word
 	timeout time.Time
 }
 
-func (Self *receiveWindowQueue) New() {
-	Self.readOp = make(chan struct{})
-	Self.chain = new(bufChain)
-	Self.chain.new(64)
-	Self.stopOp = make(chan struct{}, 2)
+func newReceiveWindowQueue() *receiveWindowQueue {
+	queue := receiveWindowQueue{
+		chain:  new(bufChain),
+		stopOp: make(chan struct{}, 2),
+		readOp: make(chan struct{}),
+	}
+	queue.chain.new(64)
+	return &queue
 }
 
 func (Self *receiveWindowQueue) Push(element *listElement) {
