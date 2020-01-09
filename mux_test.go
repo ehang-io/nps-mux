@@ -163,7 +163,6 @@ func TestApp(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				fmt.Println("write len", n)
 				if n != 1024 {
 					t.Fatal("the write len is not right")
 				}
@@ -173,12 +172,15 @@ func TestApp(t *testing.T) {
 			// get 100md from user
 			startTime = time.Now()
 			readLen := 0
-			for {
+			for i := 0; i < 1024*1000; i++ {
 				n, err := userConn.Read(b)
 				if err != nil {
 					log.Fatal(err)
 				}
 				readLen += n
+				if readLen == 1024*1024*100 {
+					break
+				}
 			}
 			if readLen != 1024*1024*100 {
 				t.Fatal("the read len is not right")
@@ -202,16 +204,18 @@ func TestUser(t *testing.T) {
 	startTime := time.Now()
 	// get 100md from app
 	readLen := 0
-	for i := 0; i < 1024*100; i++ {
+	for i := 0; i < 1024*10000; i++ {
 		n, err := appConn.Read(b)
-		fmt.Println("read ", n)
 		if err != nil {
 			log.Fatal(err)
 		}
 		readLen += n
+		if readLen == 1024*1024*100 {
+			break
+		}
 	}
 	if readLen != 1024*1024*100 {
-		t.Fatal("the read len is not right", readLen)
+		t.Fatal("the read len is not right", readLen, 1024*1024*100)
 	}
 	// read bandwidth
 	readBw := 100 / time.Now().Sub(startTime).Seconds()
