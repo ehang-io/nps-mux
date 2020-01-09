@@ -3,6 +3,7 @@ package nps_mux
 import (
 	"errors"
 	"io"
+	"log"
 	"math"
 	"net"
 	"runtime"
@@ -106,25 +107,42 @@ func (s *conn) SetWriteDeadline(t time.Time) error {
 }
 
 type window struct {
-	remainingWait uint64 // 64bit alignment
-	off           uint32
-	maxSize       uint32
-	closeOp       bool
-	closeOpCh     chan struct{}
-	mux           *Mux
+	maxSizeDone uint64
+	// 64bit alignment
+	// maxSizeDone contains 4 parts
+	//   1       31       1      31
+	// wait   maxSize  useless  done
+	// wait zero means false, one means true
+	off       uint32
+	closeOp   bool
+	closeOpCh chan struct{}
+	mux       *Mux
 }
 
-func (Self *window) unpack(ptrs uint64) (remaining, wait uint32) {
-	const mask = 1<<dequeueBits - 1
-	remaining = uint32((ptrs >> dequeueBits) & mask)
-	wait = uint32(ptrs & mask)
+const windowBits = 31
+const waitBits = dequeueBits + windowBits
+const mask1 = 1
+const mask31 = 1<<windowBits - 1
+
+func (Self *window) unpack(ptrs uint64) (maxSize, done uint32, wait bool) {
+	maxSize = uint32((ptrs >> dequeueBits) & mask31)
+	done = uint32(ptrs & mask31)
+	if ((ptrs >> waitBits) & mask1) == 1 {
+		wait = true
+		return
+	}
 	return
 }
 
-func (Self *window) pack(remaining, wait uint32) uint64 {
-	const mask = 1<<dequeueBits - 1
-	return (uint64(remaining) << dequeueBits) |
-		uint64(wait&mask)
+func (Self *window) pack(maxSize, done uint32, wait bool) uint64 {
+	if wait {
+		return (uint64(1)<<waitBits |
+			uint64(maxSize&mask31)<<dequeueBits) |
+			uint64(done&mask31)
+	}
+	return (uint64(0)<<waitBits |
+		uint64(maxSize&mask31)<<dequeueBits) |
+		uint64(done&mask31)
 }
 
 func (Self *window) New() {
@@ -141,24 +159,28 @@ func (Self *window) CloseWindow() {
 
 type receiveWindow struct {
 	window
-	bufQueue receiveWindowQueue
+	bufQueue *receiveWindowQueue
 	element  *listElement
 	count    int8
+	bw       *writeBandwidth
 	once     sync.Once
+	// receive window send the current max size and read size to send window
+	// means done size actually store the size receive window has read
 }
 
 func (Self *receiveWindow) New(mux *Mux) {
 	// initial a window for receive
-	Self.bufQueue.New()
+	Self.bufQueue = newReceiveWindowQueue()
 	Self.element = listEle.Get()
-	Self.maxSize = maximumSegmentSize * 10
+	Self.maxSizeDone = Self.pack(maximumSegmentSize*30, 0, false)
 	Self.mux = mux
 	Self.window.New()
+	Self.bw = NewWriteBandwidth()
 }
 
-func (Self *receiveWindow) remainingSize(delta uint16) (n uint32) {
+func (Self *receiveWindow) remainingSize(maxSize uint32, delta uint16) (n uint32) {
 	// receive window remaining
-	l := int64(atomic.LoadUint32(&Self.maxSize)) - int64(Self.bufQueue.Len())
+	l := int64(maxSize) - int64(Self.bufQueue.Len())
 	l -= int64(delta)
 	if l > 0 {
 		n = uint32(l)
@@ -169,28 +191,41 @@ func (Self *receiveWindow) remainingSize(delta uint16) (n uint32) {
 func (Self *receiveWindow) calcSize() {
 	// calculating maximum receive window size
 	if Self.count == 0 {
-		conns := Self.mux.connMap.Size()
-		n := uint32(math.Float64frombits(atomic.LoadUint64(&Self.mux.latency)) *
-			Self.mux.bw.Get() / float64(conns))
-		if n < maximumSegmentSize*10 {
-			n = maximumSegmentSize * 10
+		muxBw := Self.mux.bw.Get()
+		connBw := Self.bw.Get()
+		var n uint32
+		if connBw > 0 && muxBw > 0 {
+			n = uint32(math.Float64frombits(atomic.LoadUint64(&Self.mux.latency)) *
+				(muxBw + connBw))
 		}
-		bufLen := Self.bufQueue.Len()
-		if n < bufLen {
-			n = bufLen
+		if n < maximumSegmentSize*30 {
+			n = maximumSegmentSize * 30
 		}
-		if n < Self.maxSize/2 {
-			n = Self.maxSize / 2
+		for {
+			ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+			size, read, wait := Self.unpack(ptrs)
+			if n < size/2 {
+				n = size / 2
+				// half reduce
+			}
+			// set the minimal size
+			if n > 2*size {
+				n = 2 * size
+				// twice grow
+			}
+			if connBw > 0 && muxBw > 0 {
+				limit := uint32(maximumWindowSize * (connBw / (muxBw + connBw)))
+				if n > limit {
+					log.Println("window too large, calculated:", n, "limit:", limit, connBw, muxBw)
+					n = limit
+				}
+			}
+			// set the maximum size
+			if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(n, read, wait)) {
+				// only change the maxSize
+				break
+			}
 		}
-		// Set the minimal size
-		if n > 2*Self.maxSize {
-			n = 2 * Self.maxSize
-		}
-		if n > (maximumWindowSize / uint32(conns)) {
-			n = maximumWindowSize / uint32(conns)
-		}
-		// Set the maximum size
-		atomic.StoreUint32(&Self.maxSize, n)
 		Self.count = -10
 	}
 	Self.count += 1
@@ -206,24 +241,33 @@ func (Self *receiveWindow) Write(buf []byte, l uint16, part bool, id int32) (err
 		return
 	}
 	Self.calcSize() // calculate the max window size
-	var wait uint32
+	var wait bool
+	var maxSize, read uint32
 start:
-	ptrs := atomic.LoadUint64(&Self.remainingWait)
-	_, wait = Self.unpack(ptrs)
-	newRemaining := Self.remainingSize(l)
+	ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+	maxSize, read, wait = Self.unpack(ptrs)
+	remain := Self.remainingSize(maxSize, l)
 	// calculate the remaining window size now, plus the element we will push
-	if newRemaining == 0 {
-		wait = 1
-	}
-	if !atomic.CompareAndSwapUint64(&Self.remainingWait, ptrs, Self.pack(0, wait)) {
-		goto start
-		// another goroutine change the status, make sure shall we need wait
-	}
+	if remain == 0 && !wait {
+		wait = true
+		if !atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, read, wait)) {
+			// only change the wait status, not send the read size
+			goto start
+			// another goroutine change the status, make sure shall we need wait
+		}
+	} else if !wait {
+		if !atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, 0, wait)) {
+			// reset read size here, and send the read size directly
+			goto start
+			// another goroutine change the status, make sure shall we need wait
+		}
+	} // maybe there are still some data received even if window is full, just keep the wait status
+	// and push into queue. when receive window read enough, send window will be acknowledged.
 	Self.bufQueue.Push(element)
 	// status check finish, now we can push the element into the queue
-	if wait == 0 {
-		Self.mux.sendInfo(muxMsgSendOk, id, newRemaining)
-		// send the remaining window size, not including zero size
+	if !wait {
+		Self.mux.sendInfo(muxMsgSendOk, id, Self.pack(maxSize, read, false))
+		// send the current status to send window
 	}
 	return nil
 }
@@ -232,6 +276,13 @@ func (Self *receiveWindow) Read(p []byte, id int32) (n int, err error) {
 	if Self.closeOp {
 		return 0, io.EOF // receive close signal, returns eof
 	}
+	Self.bw.StartRead()
+	n, err = Self.readFromQueue(p, id)
+	Self.bw.SetCopySize(uint16(n))
+	return
+}
+
+func (Self *receiveWindow) readFromQueue(p []byte, id int32) (n int, err error) {
 	pOff := 0
 	l := 0
 copyData:
@@ -245,7 +296,7 @@ copyData:
 		Self.element, err = Self.bufQueue.Pop()
 		// if the queue is empty, Pop method will wait until one element push
 		// into the queue successful, or timeout.
-		// timer start on timeout parameter is Set up
+		// timer start on timeout parameter is set up
 		Self.off = 0
 		if err != nil {
 			Self.CloseWindow() // also close the window, to avoid read twice
@@ -270,21 +321,40 @@ copyData:
 }
 
 func (Self *receiveWindow) sendStatus(id int32, l uint16) {
-	var remaining, wait uint32
+	var maxSize, read uint32
+	var wait bool
 	for {
-		ptrs := atomic.LoadUint64(&Self.remainingWait)
-		remaining, wait = Self.unpack(ptrs)
-		remaining += uint32(l)
-		if atomic.CompareAndSwapUint64(&Self.remainingWait, ptrs, Self.pack(remaining, 0)) {
-			break
+		ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+		maxSize, read, wait = Self.unpack(ptrs)
+		if read <= (read+uint32(l))&mask31 {
+			read += uint32(l)
+			remain := Self.remainingSize(maxSize, 0)
+			if wait && remain > 0 || read >= maxSize/2 || remain == maxSize {
+				if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, 0, false)) {
+					// now we get the current window status success
+					// receive window free up some space we need acknowledge send window, also reset the read size
+					// still having a condition that receive window is empty and not send the status to send window
+					// so send the status here
+					Self.mux.sendInfo(muxMsgSendOk, id, Self.pack(maxSize, read, false))
+					break
+				}
+			} else {
+				if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, read, wait)) {
+					// receive window not into the wait status, or still not having any space now,
+					// just change the read size
+					break
+				}
+			}
+		} else {
+			//overflow
+			if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, uint32(l), wait)) {
+				// reset to l
+				Self.mux.sendInfo(muxMsgSendOk, id, Self.pack(maxSize, read, false))
+				break
+			}
 		}
 		runtime.Gosched()
 		// another goroutine change remaining or wait status, make sure
-		// we need acknowledge other side
-	}
-	// now we Get the current window status success
-	if wait == 1 {
-		Self.mux.sendInfo(muxMsgSendOk, id, remaining)
 	}
 	return
 }
@@ -306,10 +376,16 @@ func (Self *receiveWindow) CloseWindow() {
 }
 
 func (Self *receiveWindow) release() {
+	//if Self.element != nil {
+	//	if Self.element.Buf != nil {
+	//		common.WindowBuff.Put(Self.element.Buf)
+	//	}
+	//	common.ListElementPool.Put(Self.element)
+	//}
 	for {
 		ele := Self.bufQueue.TryPop()
 		if ele == nil {
-			break
+			return
 		}
 		if ele.Buf != nil {
 			windowBuff.Put(ele.Buf)
@@ -323,24 +399,34 @@ type sendWindow struct {
 	buf       []byte
 	setSizeCh chan struct{}
 	timeout   time.Time
+	// send window receive the receive window max size and read size
+	// done size store the size send window has send, send and read will be totally equal
+	// so send minus read, send window can get the current window size remaining
 }
 
 func (Self *sendWindow) New(mux *Mux) {
 	Self.setSizeCh = make(chan struct{})
-	Self.maxSize = maximumSegmentSize * 10
-	atomic.AddUint64(&Self.remainingWait, uint64(maximumSegmentSize*10)<<dequeueBits)
+	Self.maxSizeDone = Self.pack(maximumSegmentSize*30, 0, false)
 	Self.mux = mux
 	Self.window.New()
 }
 
 func (Self *sendWindow) SetSendBuf(buf []byte) {
-	// send window buff from conn write method, Set it to send window
+	// send window buff from conn write method, set it to send window
 	Self.buf = buf
 	Self.off = 0
 }
 
-func (Self *sendWindow) SetSize(newRemaining uint32) (closed bool) {
-	// Set the window size from receive window
+func (Self *sendWindow) remainingSize(maxSize, send uint32) uint32 {
+	l := int64(maxSize&mask31) - int64(send&mask31)
+	if l > 0 {
+		return uint32(l)
+	}
+	return 0
+}
+
+func (Self *sendWindow) SetSize(currentMaxSizeDone uint64) (closed bool) {
+	// set the window size from receive window
 	defer func() {
 		if recover() != nil {
 			closed = true
@@ -350,24 +436,32 @@ func (Self *sendWindow) SetSize(newRemaining uint32) (closed bool) {
 		close(Self.setSizeCh)
 		return true
 	}
-	var remaining, wait, newWait uint32
+	var maxsize, send uint32
+	var wait, newWait bool
+	currentMaxSize, read, _ := Self.unpack(currentMaxSizeDone)
 	for {
-		ptrs := atomic.LoadUint64(&Self.remainingWait)
-		remaining, wait = Self.unpack(ptrs)
-		if remaining == newRemaining {
-			//logs.Warn("waiting for another window size")
-			return false // waiting for receive another usable window size
+		ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+		maxsize, send, wait = Self.unpack(ptrs)
+		if read > send {
+			log.Println("window read > send: max size:", currentMaxSize, "read:", read, "send", send)
+			return
 		}
-		if newRemaining == 0 && wait == 1 {
-			newWait = 1 // keep the wait status,
-			// also if newRemaining is not zero, change wait to 0
+		if read == 0 && currentMaxSize == maxsize {
+			return
 		}
-		if atomic.CompareAndSwapUint64(&Self.remainingWait, ptrs, Self.pack(newRemaining, newWait)) {
+		send -= read
+		remain := Self.remainingSize(currentMaxSize, send)
+		if remain == 0 && wait {
+			// just keep the wait status
+			newWait = true
+		}
+		// remain > 0, change wait to false. or remain == 0, wait is false, just keep it
+		if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(currentMaxSize, send, newWait)) {
 			break
 		}
 		// anther goroutine change wait status or window size
 	}
-	if wait == 1 {
+	if wait && !newWait {
 		// send window into the wait status, need notice the channel
 		Self.allow()
 	}
@@ -386,7 +480,21 @@ func (Self *sendWindow) allow() {
 }
 
 func (Self *sendWindow) sent(sentSize uint32) {
-	atomic.AddUint64(&Self.remainingWait, ^(uint64(sentSize)<<dequeueBits - 1))
+	var maxSie, send uint32
+	var wait bool
+	for {
+		ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+		maxSie, send, wait = Self.unpack(ptrs)
+		if (send+sentSize)&mask31 < send {
+			// overflow
+			runtime.Gosched()
+			continue
+		}
+		if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSie, send+sentSize, wait)) {
+			// set the send size
+			break
+		}
+	}
 }
 
 func (Self *sendWindow) WriteTo() (p []byte, sendSize uint32, part bool, err error) {
@@ -397,14 +505,16 @@ func (Self *sendWindow) WriteTo() (p []byte, sendSize uint32, part bool, err err
 	}
 	if Self.off == uint32(len(Self.buf)) {
 		return nil, 0, false, io.EOF
-		// send window buff is drain, return eof and Get another one
+		// send window buff is drain, return eof and get another one
 	}
-	var remaining uint32
+	var maxSize, send uint32
 start:
-	ptrs := atomic.LoadUint64(&Self.remainingWait)
-	remaining, _ = Self.unpack(ptrs)
-	if remaining == 0 {
-		if !atomic.CompareAndSwapUint64(&Self.remainingWait, ptrs, Self.pack(0, 1)) {
+	ptrs := atomic.LoadUint64(&Self.maxSizeDone)
+	maxSize, send, _ = Self.unpack(ptrs)
+	remain := Self.remainingSize(maxSize, send)
+	if remain == 0 {
+		if !atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(maxSize, send, true)) {
+			// just change the status wait status
 			goto start // another goroutine change the window, try again
 		}
 		// into the wait status
@@ -420,10 +530,10 @@ start:
 	} else {
 		sendSize = uint32(len(Self.buf[Self.off:]))
 	}
-	if remaining < sendSize {
+	if remain < sendSize {
 		// usable window size is small than
 		// window MAXIMUM_SEGMENT_SIZE or send buf left
-		sendSize = remaining
+		sendSize = remain
 	}
 	if sendSize < uint32(len(Self.buf[Self.off:])) {
 		part = true
@@ -436,7 +546,7 @@ start:
 
 func (Self *sendWindow) waitReceiveWindow() (err error) {
 	t := Self.timeout.Sub(time.Now())
-	if t < 0 { // not Set the timeout, wait for it as long as connection close
+	if t < 0 { // not set the timeout, wait for it as long as connection close
 		select {
 		case _, ok := <-Self.setSizeCh:
 			if !ok {
@@ -464,13 +574,13 @@ func (Self *sendWindow) waitReceiveWindow() (err error) {
 }
 
 func (Self *sendWindow) WriteFull(buf []byte, id int32) (n int, err error) {
-	Self.SetSendBuf(buf) // Set the buf to send window
+	Self.SetSendBuf(buf) // set the buf to send window
 	var bufSeg []byte
 	var part bool
 	var l uint32
 	for {
 		bufSeg, l, part, err = Self.WriteTo()
-		// Get the buf segments from send window
+		// get the buf segments from send window
 		if bufSeg == nil && part == false && err == io.EOF {
 			// send window is drain, break the loop
 			err = nil
@@ -494,4 +604,51 @@ func (Self *sendWindow) WriteFull(buf []byte, id int32) (n int, err error) {
 func (Self *sendWindow) SetTimeOut(t time.Time) {
 	// waiting for receive a receive window size
 	Self.timeout = t
+}
+
+type writeBandwidth struct {
+	writeBW   uint64 // store in bits, but it's float64
+	readEnd   time.Time
+	duration  float64
+	bufLength uint32
+}
+
+const writeCalcThreshold uint32 = 5 * 1024 * 1024
+
+func NewWriteBandwidth() *writeBandwidth {
+	return &writeBandwidth{}
+}
+
+func (Self *writeBandwidth) StartRead() {
+	if Self.readEnd.IsZero() {
+		Self.readEnd = time.Now()
+	}
+	Self.duration += time.Now().Sub(Self.readEnd).Seconds()
+	if Self.bufLength >= writeCalcThreshold {
+		Self.calcBandWidth()
+	}
+}
+
+func (Self *writeBandwidth) SetCopySize(n uint16) {
+	Self.bufLength += uint32(n)
+	Self.endRead()
+}
+
+func (Self *writeBandwidth) endRead() {
+	Self.readEnd = time.Now()
+}
+
+func (Self *writeBandwidth) calcBandWidth() {
+	atomic.StoreUint64(&Self.writeBW, math.Float64bits(float64(Self.bufLength)/Self.duration))
+	Self.bufLength = 0
+	Self.duration = 0
+}
+
+func (Self *writeBandwidth) Get() (bw float64) {
+	// The zero value, 0 for numeric types
+	bw = math.Float64frombits(atomic.LoadUint64(&Self.writeBW))
+	if bw <= 0 {
+		bw = 0
+	}
+	return
 }
