@@ -72,9 +72,9 @@ func (Self *basePackager) reset() {
 }
 
 type muxPackager struct {
-	flag         uint8
-	id           int32
-	remainLength uint32
+	flag   uint8
+	id     int32
+	window uint64
 	basePackager
 }
 
@@ -86,8 +86,8 @@ func (Self *muxPackager) Set(flag uint8, id int32, content interface{}) (err err
 		Self.content = windowBuff.Get()
 		err = Self.basePackager.Set(content.([]byte))
 	case muxMsgSendOk:
-		// MUX_MSG_SEND_OK contains uint32 data
-		Self.remainLength = content.(uint32)
+		// MUX_MSG_SEND_OK contains one data
+		Self.window = content.(uint64)
 	}
 	return
 }
@@ -106,7 +106,7 @@ func (Self *muxPackager) Pack(writer io.Writer) (err error) {
 		err = Self.basePackager.Pack(writer)
 		windowBuff.Put(Self.content)
 	case muxMsgSendOk:
-		err = binary.Write(writer, binary.LittleEndian, Self.remainLength)
+		err = binary.Write(writer, binary.LittleEndian, Self.window)
 	}
 	return
 }
@@ -125,8 +125,8 @@ func (Self *muxPackager) UnPack(reader io.Reader) (n uint16, err error) {
 		Self.content = windowBuff.Get() // need Get a window buf from pool
 		n, err = Self.basePackager.UnPack(reader)
 	case muxMsgSendOk:
-		err = binary.Read(reader, binary.LittleEndian, &Self.remainLength)
-		n += 4 // uint32
+		err = binary.Read(reader, binary.LittleEndian, &Self.window)
+		n += 8 // uint64
 	}
 	n += 5 //uint8 int32
 	return
@@ -137,5 +137,5 @@ func (Self *muxPackager) reset() {
 	Self.flag = 0
 	Self.length = 0
 	Self.content = nil
-	Self.remainLength = 0
+	Self.window = 0
 }

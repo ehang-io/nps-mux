@@ -3,12 +3,12 @@ package nps_mux
 import (
 	"errors"
 	"io"
+	"log"
 	"math"
 	"net"
+	"os"
 	"sync/atomic"
 	"time"
-
-	"github.com/astaxie/beego/logs"
 )
 
 const (
@@ -23,8 +23,8 @@ const (
 	muxPingReturn
 	muxPing            int32 = -1
 	maximumSegmentSize       = poolSizeWindow
-	maximumWindowSize        = 1 << 25 // 1<<31-1 TCP slide window size is very large,
-	// we use 32M, reduce memory usage
+	maximumWindowSize        = 1 << 27 // 1<<31-1 TCP slide window size is very large,
+	// we use 128M, reduce memory usage
 )
 
 type Mux struct {
@@ -49,13 +49,17 @@ type Mux struct {
 func NewMux(c net.Conn, connType string) *Mux {
 	//c.(*net.TCPConn).SetReadBuffer(0)
 	//c.(*net.TCPConn).SetWriteBuffer(0)
+	fd, err := getConnFd(c)
+	if err != nil {
+		log.Println(err)
+	}
 	m := &Mux{
 		conn:      c,
 		connMap:   NewConnMap(),
 		id:        0,
 		closeChan: make(chan struct{}, 1),
 		newConnCh: make(chan *conn),
-		bw:        new(bandwidth),
+		bw:        NewBandwidth(fd),
 		IsClose:   false,
 		connType:  connType,
 		pingCh:    make(chan []byte),
@@ -114,7 +118,7 @@ func (s *Mux) sendInfo(flag uint8, id int32, data interface{}) {
 	err = pack.Set(flag, id, data)
 	if err != nil {
 		muxPack.Put(pack)
-		logs.Error("mux: New Pack err", err)
+		log.Println("mux: New Pack err", err)
 		_ = s.Close()
 		return
 	}
@@ -135,7 +139,7 @@ func (s *Mux) writeSession() {
 			err := pack.Pack(s.conn)
 			muxPack.Put(pack)
 			if err != nil {
-				logs.Error("mux: Pack err", err)
+				log.Println("mux: Pack err", err)
 				_ = s.Close()
 				break
 			}
@@ -158,7 +162,7 @@ func (s *Mux) ping() {
 			case <-ticker.C:
 			}
 			if atomic.LoadUint32(&s.pingCheckTime) >= 60 {
-				logs.Error("mux: ping time out")
+				log.Println("mux: ping time out")
 				_ = s.Close()
 				// more than 5 minutes not receive the ping return package,
 				// mux conn is damaged, maybe a packet drop, close it
@@ -168,7 +172,7 @@ func (s *Mux) ping() {
 			s.sendInfo(muxPingFlag, muxPing, now)
 			atomic.AddUint32(&s.pingCheckTime, 1)
 			if atomic.LoadUint32(&s.pingOk) > 10 && s.connType == "kcp" {
-				logs.Error("mux: kcp ping err")
+				log.Println("mux: kcp ping err")
 				_ = s.Close()
 				break
 			}
@@ -230,7 +234,7 @@ func (s *Mux) readSession() {
 			pack = muxPack.Get()
 			s.bw.StartRead()
 			if l, err = pack.UnPack(s.conn); err != nil {
-				logs.Error("mux: read session unpack from connection err", err)
+				log.Println("mux: read session unpack from connection err", err)
 				_ = s.Close()
 				break
 			}
@@ -254,7 +258,7 @@ func (s *Mux) readSession() {
 				case muxNewMsg, muxNewMsgPart: //New msg from remote connection
 					err = s.newMsg(connection, pack)
 					if err != nil {
-						logs.Error("mux: read session connection New msg err", err)
+						log.Println("mux: read session connection New msg err", err)
 						_ = connection.Close()
 					}
 					continue
@@ -268,7 +272,7 @@ func (s *Mux) readSession() {
 					if connection.isClose {
 						continue
 					}
-					connection.sendWindow.SetSize(pack.remainLength)
+					connection.sendWindow.SetSize(pack.window)
 					continue
 				case muxConnClose: //close the connection
 					connection.closingFlag = true
@@ -301,7 +305,7 @@ func (s *Mux) newMsg(connection *conn, pack *muxPackager) (err error) {
 }
 
 func (s *Mux) Close() (err error) {
-	logs.Warn("close mux")
+	log.Println("close mux")
 	if s.IsClose {
 		return errors.New("the mux has closed")
 	}
@@ -355,13 +359,19 @@ type bandwidth struct {
 	readStart     time.Time
 	lastReadStart time.Time
 	bufLength     uint32
+	fd            *os.File
+	calcThreshold uint32
+}
+
+func NewBandwidth(fd *os.File) *bandwidth {
+	return &bandwidth{fd: fd}
 }
 
 func (Self *bandwidth) StartRead() {
 	if Self.readStart.IsZero() {
 		Self.readStart = time.Now()
 	}
-	if Self.bufLength >= maximumSegmentSize*300 {
+	if Self.bufLength >= Self.calcThreshold {
 		Self.lastReadStart, Self.readStart = Self.readStart, time.Now()
 		Self.calcBandWidth()
 	}
@@ -373,7 +383,19 @@ func (Self *bandwidth) SetCopySize(n uint16) {
 
 func (Self *bandwidth) calcBandWidth() {
 	t := Self.readStart.Sub(Self.lastReadStart)
-	atomic.StoreUint64(&Self.readBandwidth, math.Float64bits(float64(Self.bufLength)/t.Seconds()))
+	bufferSize, err := sysGetSock(Self.fd)
+	if err != nil {
+		log.Println(err)
+		Self.bufLength = 0
+		return
+	}
+	if Self.bufLength >= uint32(bufferSize) {
+		atomic.StoreUint64(&Self.readBandwidth, math.Float64bits(float64(Self.bufLength)/t.Seconds()))
+		// calculate the whole socket buffer, the time meaning to fill the buffer
+	} else {
+		Self.calcThreshold = uint32(bufferSize)
+	}
+	// socket buffer size is bigger than bufLength, so we don't calculate it
 	Self.bufLength = 0
 }
 
@@ -381,7 +403,7 @@ func (Self *bandwidth) Get() (bw float64) {
 	// The zero value, 0 for numeric types
 	bw = math.Float64frombits(atomic.LoadUint64(&Self.readBandwidth))
 	if bw <= 0 {
-		bw = 100
+		bw = 0
 	}
 	return
 }
