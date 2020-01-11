@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"github.com/cnlh/nps/lib/common"
-	"github.com/cnlh/nps/lib/goroutine"
 	"io"
 	"log"
 	"math"
@@ -19,8 +17,6 @@ import (
 	"testing"
 	"time"
 	"unsafe"
-
-	"github.com/astaxie/beego/logs"
 )
 
 var conn1 net.Conn
@@ -187,7 +183,7 @@ func TestApp(t *testing.T) {
 			t.Fatal(err)
 		}
 		go func(userConn net.Conn) {
-			b := bytes.Repeat([]byte{0,}, 1024)
+			b := bytes.Repeat([]byte{0}, 1024)
 			startTime := time.Now()
 			// send 100mb data to user
 			for i := 0; i < 1024*100; i++ {
@@ -220,7 +216,7 @@ func TestApp(t *testing.T) {
 			// read bandwidth
 			readBw := 100 / time.Now().Sub(startTime).Seconds()
 			// save result
-			err := writeResult([]float64{writeBw, readBw,}, appResultFileName)
+			err := writeResult([]float64{writeBw, readBw}, appResultFileName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +235,7 @@ func TestUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := bytes.Repeat([]byte{0,}, 1024)
+	b := bytes.Repeat([]byte{0}, 1024)
 	startTime := time.Now()
 	// get 100md from app
 	readLen := 0
@@ -272,7 +268,7 @@ func TestUser(t *testing.T) {
 	// send bandwidth
 	writeBw := 100 / time.Now().Sub(startTime).Seconds()
 	// save result
-	err = writeResult([]float64{readBw, writeBw,}, userResultFileName)
+	err = writeResult([]float64{readBw, writeBw}, userResultFileName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,11 +279,8 @@ func TestNewMux2(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = tc.RunNetRangeTest(func() {
-		logs.EnableFuncCallDepth(true)
-		logs.SetLogFuncCallDepth(3)
 		server(tc.Eth.EthAddr)
 		client(tc.Eth.EthAddr)
-		//poolConnCopy, _ := ants.NewPoolWithFunc(200000, common.copyConn, ants.WithNonblocking(false))
 		time.Sleep(time.Second * 3)
 		rate := NewRate(1024 * 1024 * 3)
 		rate.Start()
@@ -297,7 +290,7 @@ func TestNewMux2(t *testing.T) {
 			for {
 				c, err := m2.Accept()
 				if err != nil {
-					logs.Warn(err)
+					log.Println(err)
 					continue
 				}
 				go func() {
@@ -310,7 +303,7 @@ func TestNewMux2(t *testing.T) {
 		m1 := NewMux(conn1, "tcp")
 		tmpCpnn, err := m1.NewConn()
 		if err != nil {
-			logs.Warn("nps new conn err ", err)
+			log.Println("nps new conn err ", err)
 			return
 		}
 		buf := make([]byte, 1024*1024)
@@ -320,73 +313,58 @@ func TestNewMux2(t *testing.T) {
 		for {
 			n, err := tmpCpnn.Read(buf)
 			count += float64(n)
-			logs.Warn(m1.bw.Get())
-			logs.Warn(uint32(math.Float64frombits(atomic.LoadUint64(&m1.latency))))
+			log.Println(m1.bw.Get())
+			log.Println(uint32(math.Float64frombits(atomic.LoadUint64(&m1.latency))))
 			if err != nil {
-				logs.Warn(err)
+				log.Println(err)
 				break
 			}
 		}
-		logs.Warn("now rate", count/time.Now().Sub(start).Seconds()/1024/1024)
+		log.Println("now rate", count/time.Now().Sub(start).Seconds()/1024/1024)
 	})
-	logs.Warning(err.Error())
+	log.Println(err.Error())
 }
 func TestNewMux(t *testing.T) {
 	go func() {
 		http.ListenAndServe("0.0.0.0:8889", nil)
 	}()
-	logs.EnableFuncCallDepth(true)
-	logs.SetLogFuncCallDepth(3)
 	server("")
 	client("")
-	//poolConnCopy, _ := ants.NewPoolWithFunc(200000, common.copyConn, ants.WithNonblocking(false))
 	time.Sleep(time.Second * 3)
 	go func() {
 		m2 := NewMux(conn2, "tcp")
 		for {
-			//logs.Warn("npc starting accept")
+			log.Println("npc starting accept")
 			c, err := m2.Accept()
 			if err != nil {
-				logs.Warn(err)
+				log.Println(err)
 				continue
 			}
-			//logs.Warn("npc accept success ")
+			log.Println("npc accept success ")
 			c2, err := net.Dial("tcp", "127.0.0.1:80")
 			if err != nil {
-				logs.Warn(err)
+				log.Println(err)
 				c.Close()
 				continue
 			}
 			//c2.(*net.TCPConn).SetReadBuffer(0)
 			//c2.(*net.TCPConn).SetReadBuffer(0)
-			_ = goroutine.CopyConnsPool.Invoke(goroutine.NewConns(c, c2, nil))
-			//go func(c2 net.Conn, c *conn) {
-			//	wg := New(sync.WaitGroup)
-			//	wg.Add(2)
-			//	_ = poolConnCopy.Invoke(common.newConnGroup(c2, c, wg))
-			//	//go func() {
-			//	//	_, err = common.CopyBuffer(c2, c)
-			//	//	if err != nil {
-			//	//		c2.Close()
-			//	//		c.Close()
-			//	//		//logs.Warn("close npc by copy from nps", err, c.connId)
-			//	//	}
-			//	//	wg.Done()
-			//	//}()
-			//	//wg.Add(1)
-			//	_ = poolConnCopy.Invoke(common.newConnGroup(c, c2, wg))
-			//	//go func() {
-			//	//	_, err = common.CopyBuffer(c, c2)
-			//	//	if err != nil {
-			//	//		c2.Close()
-			//	//		c.Close()
-			//	//		//logs.Warn("close npc by copy from server", err, c.connId)
-			//	//	}
-			//	//	wg.Done()
-			//	//}()
-			//	//logs.Warn("npc wait")
-			//	wg.Wait()
-			//}(c2, c.(*conn))
+			go func(c2 net.Conn, c *conn) {
+				go func() {
+					_, err = io.Copy(c2, c)
+					if err != nil {
+						c2.Close()
+						c.Close()
+						//logs.Warn("close npc by copy from nps", err, c.connId)
+					}
+				}()
+				_, err = io.Copy(c, c2)
+				if err != nil {
+					c2.Close()
+					c.Close()
+					//logs.Warn("close npc by copy from server", err, c.connId)
+				}
+			}(c2, c.(*conn))
 		}
 	}()
 
@@ -394,48 +372,41 @@ func TestNewMux(t *testing.T) {
 		m1 := NewMux(conn1, "tcp")
 		l, err := net.Listen("tcp", "127.0.0.1:7777")
 		if err != nil {
-			logs.Warn(err)
+			log.Println(err)
 		}
 		for {
-			//logs.Warn("nps starting accept")
+			log.Println("nps starting accept")
 			conns, err := l.Accept()
 			if err != nil {
-				logs.Warn(err)
+				log.Println(err)
 				continue
 			}
 			//conns.(*net.TCPConn).SetReadBuffer(0)
 			//conns.(*net.TCPConn).SetReadBuffer(0)
-			//logs.Warn("nps accept success starting New conn")
+			log.Println("nps accept success starting New conn")
 			tmpCpnn, err := m1.NewConn()
 			if err != nil {
-				logs.Warn("nps New conn err ", err)
+				log.Println("nps New conn err ", err)
 				continue
 			}
 			//logs.Warn("nps New conn success ", tmpCpnn.connId)
-			_ = goroutine.CopyConnsPool.Invoke(goroutine.NewConns(tmpCpnn, conns, nil))
-			//go func(tmpCpnn *conn, conns net.Conn) {
-			//	wg := New(sync.WaitGroup)
-			//	wg.Add(2)
-			//	_ = poolConnCopy.Invoke(common.newConnGroup(tmpCpnn, conns, wg))
-			//	//go func() {
-			//	//	_, err := common.CopyBuffer(tmpCpnn, conns)
-			//	//	if err != nil {
-			//	//		conns.Close()
-			//	//		tmpCpnn.Close()
-			//	//		//logs.Warn("close nps by copy from user", tmpCpnn.connId, err)
-			//	//	}
-			//	//}()
-			//	//wg.Add(1)
-			//	_ = poolConnCopy.Invoke(common.newConnGroup(conns, tmpCpnn, wg))
-			//	//time.Sleep(time.Second)
-			//	//_, err = common.CopyBuffer(conns, tmpCpnn)
-			//	//if err != nil {
-			//	//	conns.Close()
-			//	//	tmpCpnn.Close()
-			//	//	//logs.Warn("close nps by copy from npc ", tmpCpnn.connId, err)
-			//	//}
-			//	wg.Wait()
-			//}(tmpCpnn, conns)
+			go func(tmpCpnn *conn, conns net.Conn) {
+				go func() {
+					_, err := io.Copy(tmpCpnn, conns)
+					if err != nil {
+						conns.Close()
+						tmpCpnn.Close()
+						//logs.Warn("close nps by copy from user", tmpCpnn.connId, err)
+					}
+				}()
+				time.Sleep(time.Second)
+				_, err = io.Copy(conns, tmpCpnn)
+				if err != nil {
+					conns.Close()
+					tmpCpnn.Close()
+					//logs.Warn("close nps by copy from npc ", tmpCpnn.connId, err)
+				}
+			}(tmpCpnn, conns)
 		}
 	}()
 
@@ -458,12 +429,12 @@ func server(ip string) {
 	var err error
 	l, err := net.Listen("tcp", ip+":9999")
 	if err != nil {
-		logs.Warn(err)
+		log.Println(err)
 	}
 	go func() {
 		conn1, err = l.Accept()
 		if err != nil {
-			logs.Warn(err)
+			log.Println(err)
 		}
 	}()
 	return
@@ -476,7 +447,7 @@ func client(ip string) {
 	var err error
 	conn2, err = net.Dial("tcp", ip+":9999")
 	if err != nil {
-		logs.Warn(err)
+		log.Println(err)
 	}
 }
 
@@ -491,19 +462,19 @@ Connection: keep-alive
 `))
 		r, err := http.ReadResponse(bufio.NewReader(conn), nil)
 		if err != nil {
-			logs.Warn("close by read response err", err)
+			log.Println("close by read response err", err)
 			break
 		}
-		logs.Warn("read response success", r)
+		log.Println("read response success", r)
 		b, err := httputil.DumpResponse(r, true)
 		if err != nil {
-			logs.Warn("close by dump response err", err)
+			log.Println("close by dump response err", err)
 			break
 		}
 		fmt.Println(string(b[:20]), err)
 		//time.Sleep(time.Second)
 	}
-	logs.Warn("finish")
+	log.Println("finish")
 }
 
 func test_raw(k int) {
@@ -511,7 +482,7 @@ func test_raw(k int) {
 		ti := time.Now()
 		conn, err := net.Dial("tcp", "127.0.0.1:7777")
 		if err != nil {
-			logs.Warn("conn dial err", err)
+			log.Println("conn dial err", err)
 		}
 		tid := time.Now()
 		conn.Write([]byte(`GET /videojs5/video.js HTTP/1.1
@@ -524,58 +495,56 @@ Host: 127.0.0.1:7777
 		n, err := io.ReadFull(conn, buf)
 		//n, err := conn.Read(buf)
 		if err != nil {
-			logs.Warn("close by read response err", err)
+			log.Println("close by read response err", err)
 			break
 		}
-		logs.Warn(n, string(buf[:50]), "\n--------------\n", string(buf[n-50:n]))
+		log.Println(n, string(buf[:50]), "\n--------------\n", string(buf[n-50:n]))
 		//time.Sleep(time.Second)
 		err = conn.Close()
 		if err != nil {
-			logs.Warn("close conn err ", err)
+			log.Println("close conn err ", err)
 		}
 		now := time.Now()
 		du := now.Sub(ti).Seconds()
 		dud := now.Sub(tid).Seconds()
 		duw := now.Sub(tiw).Seconds()
 		if du > 1 {
-			logs.Warn("duration long", du, dud, duw, k, i)
+			log.Println("duration long", du, dud, duw, k, i)
 		}
 		if n != 3572 {
-			logs.Warn("n loss", n, string(buf))
+			log.Println("n loss", n, string(buf))
 		}
 	}
-	logs.Warn("finish")
+	log.Println("finish")
 }
 
 func TestNewConn(t *testing.T) {
-	buf := common.GetBufPoolCopy()
-	logs.Warn(len(buf), cap(buf))
+	buf := make([]byte, 1024)
+	log.Println(len(buf), cap(buf))
 	//b := pool.GetBufPoolCopy()
 	//b[0] = 1
 	//b[1] = 2
 	//b[2] = 3
 	b := []byte{1, 2, 3}
-	logs.Warn(copy(buf[:3], b), len(buf), cap(buf))
-	logs.Warn(len(buf), buf[0])
+	log.Println(copy(buf[:3], b), len(buf), cap(buf))
+	log.Println(len(buf), buf[0])
 }
 
 func TestDQueue(t *testing.T) {
-	logs.EnableFuncCallDepth(true)
-	logs.SetLogFuncCallDepth(3)
 	d := new(bufDequeue)
 	d.vals = make([]unsafe.Pointer, 8)
 	go func() {
 		time.Sleep(time.Second)
 		for i := 0; i < 10; i++ {
-			logs.Warn(i)
-			logs.Warn(d.popTail())
+			log.Println(i)
+			log.Println(d.popTail())
 		}
 	}()
 	go func() {
 		time.Sleep(time.Second)
 		for i := 0; i < 10; i++ {
 			data := "test"
-			go logs.Warn(i, unsafe.Pointer(&data), d.pushHead(unsafe.Pointer(&data)))
+			go log.Println(i, unsafe.Pointer(&data), d.pushHead(unsafe.Pointer(&data)))
 		}
 	}()
 	time.Sleep(time.Second * 3)
@@ -585,8 +554,6 @@ func TestChain(t *testing.T) {
 	go func() {
 		log.Println(http.ListenAndServe("0.0.0.0:8889", nil))
 	}()
-	logs.EnableFuncCallDepth(true)
-	logs.SetLogFuncCallDepth(3)
 	time.Sleep(time.Second * 5)
 	d := new(bufChain)
 	d.new(256)
