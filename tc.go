@@ -214,7 +214,11 @@ func deleteNetwork(name string) error {
 
 func runDocker(dockerName, networkName, ip, testFunName, nowDir string) error {
 	// docker run --env GOPROXY=https://goproxy.cn  --rm --name client --net test --cap-add=NET_ADMIN --ip 172.18.0.5 -v "$PWD":/usr/src/myapp -w /usr/src/myapp golang go test -v -run TestClient ./
-	return runCmd(exec.Command("docker", "run", "--rm", "--name", dockerName, "--net", networkName,
+	return runCmd(exec.Command("docker", "run", "--env", "GOPROXY=https://goproxy.cn", "--rm", "--name", dockerName, "--net", networkName,
 		"--cap-add=NET_ADMIN", "--ip", ip, "-v", nowDir+`:/usr/src/myapp`, "-w", `/usr/src/myapp`, "golang", "go", "test",
 		"-v", "-run", testFunName, "./"))
+}
+
+func stopDocker(dockerName string) error {
+	return runCmd(exec.Command("docker", "stop", dockerName))
 }

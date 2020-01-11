@@ -38,6 +38,7 @@ var serverResultFileName = "server.txt"
 var clientResultFileName = "client.txt"
 var dockerNetWorkName = "test"
 var network = "172.18.0.0/16"
+var fileSavePath = "/usr/src/myapp/"
 
 func TestMux(t *testing.T) {
 	pwd, err := os.Getwd()
@@ -49,11 +50,14 @@ func TestMux(t *testing.T) {
 	go runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
 	go runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
 	runDocker("user", dockerNetWorkName, userIp, "TestUser", pwd)
+	stopDocker("server")
+	stopDocker("client")
+	stopDocker("app")
 	deleteNetwork(dockerNetWorkName)
 }
 
 func writeResult(values []float64, outfile string) error {
-	file, err := os.Create(outfile)
+	file, err := os.Create(fileSavePath + outfile)
 	if err != nil {
 		fmt.Println("writer", err)
 		return err
