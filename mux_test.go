@@ -13,6 +13,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,14 +42,25 @@ func TestMux(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var wg sync.WaitGroup
+	wg.Add(3)
 	createNetwork(dockerNetWorkName, network)
-	go runDocker("server", dockerNetWorkName, serverIp, "TestServer", pwd)
-	go runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
-	go runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
+	go func() {
+		defer wg.Done()
+		runDocker("server", dockerNetWorkName, serverIp, "TestServer", pwd)
+	}()
+	time.Sleep(time.Second * 5)
+	go func() {
+		defer wg.Done()
+		runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
+	}()
+	go func() {
+		defer wg.Done()
+		runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
+	}()
+	time.Sleep(time.Second * 5)
 	runDocker("user", dockerNetWorkName, userIp, "TestUser", pwd)
-	stopDocker("server")
-	stopDocker("client")
-	stopDocker("app")
+	wg.Wait()
 	deleteNetwork(dockerNetWorkName)
 }
 
@@ -122,6 +134,7 @@ func TestServer(t *testing.T) {
 				}
 			}()
 			io.Copy(clientConn, userConn)
+			os.Exit(0)
 		}(userConn)
 	}
 }
@@ -162,6 +175,7 @@ func TestClient(t *testing.T) {
 				}, clientResultFileName)
 			}()
 			io.Copy(appConn, userConn)
+			os.Exit(0)
 		}(userConn)
 	}
 }
@@ -183,7 +197,7 @@ func TestApp(t *testing.T) {
 			t.Fatal(err)
 		}
 		go func(userConn net.Conn) {
-			b := bytes.Repeat([]byte{0}, 1024)
+			b := bytes.Repeat([]byte{0,}, 1024)
 			startTime := time.Now()
 			// send 100mb data to user
 			for i := 0; i < 1024*100; i++ {
@@ -200,11 +214,13 @@ func TestApp(t *testing.T) {
 			// get 100md from user
 			startTime = time.Now()
 			readLen := 0
-			for i := 0; i < 1024*1000; i++ {
+			for i := 0; i < 1024*10000; i++ {
 				n, err := userConn.Read(b)
+				fmt.Println(n)
 				if err != nil {
 					log.Fatal(err)
 				}
+				fmt.Println(readLen)
 				readLen += n
 				if readLen == 1024*1024*100 {
 					break
@@ -213,13 +229,15 @@ func TestApp(t *testing.T) {
 			if readLen != 1024*1024*100 {
 				t.Fatal("the read len is not right")
 			}
+			userConn.Write([]byte{0})
 			// read bandwidth
 			readBw := 100 / time.Now().Sub(startTime).Seconds()
 			// save result
-			err := writeResult([]float64{writeBw, readBw}, appResultFileName)
+			err := writeResult([]float64{writeBw, readBw,}, appResultFileName)
 			if err != nil {
 				t.Fatal(err)
 			}
+			os.Exit(0)
 		}(userConn)
 	}
 }
@@ -235,7 +253,7 @@ func TestUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := bytes.Repeat([]byte{0}, 1024)
+	b := bytes.Repeat([]byte{0,}, 1024)
 	startTime := time.Now()
 	// get 100md from app
 	readLen := 0
@@ -256,6 +274,7 @@ func TestUser(t *testing.T) {
 	readBw := 100 / time.Now().Sub(startTime).Seconds()
 	// send 100mb data to app
 	startTime = time.Now()
+	b = bytes.Repeat([]byte{0,}, 1024)
 	for i := 0; i < 1024*100; i++ {
 		n, err := appConn.Write(b)
 		if err != nil {
@@ -265,10 +284,15 @@ func TestUser(t *testing.T) {
 			t.Fatal("the write len is not right")
 		}
 	}
+	b = make([]byte, 1)
+	_, err = io.ReadFull(appConn, b)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// send bandwidth
 	writeBw := 100 / time.Now().Sub(startTime).Seconds()
 	// save result
-	err = writeResult([]float64{readBw, writeBw}, userResultFileName)
+	err = writeResult([]float64{readBw, writeBw,}, userResultFileName)
 	if err != nil {
 		t.Fatal(err)
 	}
