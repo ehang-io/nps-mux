@@ -1,6 +1,7 @@
 package nps_mux
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -173,8 +174,13 @@ func (tc *TrafficControl) Run() error {
 
 // remove all tc setting
 func (tc *TrafficControl) del() error {
-	tc.params = tc.params[:0]
+	tc.clear()
 	return runCmd(exec.Command("tc", "qdisc", "del", "dev", tc.Eth.EthName, "root"))
+}
+
+// clear the old settings
+func (tc *TrafficControl) clear() {
+	tc.params = tc.params[:0]
 }
 
 // remove all tc setting
@@ -185,9 +191,30 @@ func (tc *TrafficControl) bandwidth(bw string) error {
 
 func runCmd(cmd *exec.Cmd) error {
 	fmt.Println("run cmd:", cmd.Args)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
+		fmt.Println(fmt.Sprint(err) + ": " + stderr.String())
 		return err
 	}
 	return nil
+}
+
+func createNetwork(name, networok string) error {
+	// docker network create --subnet=172.18.0.0/16 test
+	return runCmd(exec.Command("docker", "network", "create", "--subnet="+networok, name))
+}
+
+func deleteNetwork(name string) error {
+	return runCmd(exec.Command("docker", "network", "rm", name))
+}
+
+func runDocker(dockerName, networkName, ip, testFunName, nowDir string) error {
+	// docker run --env GOPROXY=https://goproxy.cn  --rm --name client --net test --cap-add=NET_ADMIN --ip 172.18.0.5 -v "$PWD":/usr/src/myapp -w /usr/src/myapp golang go test -v -run TestClient ./
+	return runCmd(exec.Command("docker", "run", "--rm", "--name", dockerName, "--net", networkName,
+		"--cap-add=NET_ADMIN", "--ip", ip, "-v", nowDir+`:/usr/src/myapp`, "-w", `/usr/src/myapp`, "golang", "go", "test",
+		"-v", "-run", testFunName, "./"))
 }

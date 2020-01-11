@@ -36,8 +36,23 @@ var appResultFileName = "app.txt"
 var userResultFileName = "user.txt"
 var serverResultFileName = "server.txt"
 var clientResultFileName = "client.txt"
+var dockerNetWorkName = "test"
+var network = "172.18.0.0/16"
 
-func writeResult(vals []string, outfile string) error {
+func TestMux(t *testing.T) {
+	pwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	createNetwork(dockerNetWorkName, network)
+	go runDocker("server", dockerNetWorkName, serverIp, "TestServer", pwd)
+	go runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
+	go runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
+	runDocker("user", dockerNetWorkName, userIp, "TestUser", pwd)
+	deleteNetwork(dockerNetWorkName)
+}
+
+func writeResult(values []float64, outfile string) error {
 	file, err := os.Create(outfile)
 	if err != nil {
 		fmt.Println("writer", err)
@@ -45,19 +60,22 @@ func writeResult(vals []string, outfile string) error {
 	}
 	defer file.Close()
 	writer := bufio.NewWriter(file)
-	for _, v := range vals {
-		writer.WriteString(v)
+	for _, v := range values {
+		writer.WriteString(fmt.Sprintf("%.2f", v))
 		writer.WriteString("\n")
 		writer.Flush()
 	}
 	return err
 }
+
 func TestServer(t *testing.T) {
 	tc, err := NewTrafficControl(serverIp)
 	if err != nil {
 		t.Fatal(err, tc)
 	}
 	// do some tc settings
+	tc.delay("add", "50ms", "10ms", "10%")
+	tc.Run()
 	// start bridge
 	bridgeListener, err := net.Listen("tcp", serverIp+":"+bridgePort)
 	if err != nil {
@@ -91,11 +109,17 @@ func TestServer(t *testing.T) {
 			}
 			go io.Copy(userConn, clientConn)
 			go func() {
-				time.Sleep(time.Second * 10)
-				writeResult([]string{
-					strconv.Itoa(int(mux.bw.Get() / 1024 / 1024)),
-					strconv.Itoa(int(math.Float64frombits(atomic.LoadUint64(&mux.latency)))),
-				}, serverResultFileName)
+				ticker := time.NewTicker(time.Second * 10)
+				for {
+					select {
+					case <-ticker.C:
+						fmt.Println(mux.bw.Get()/1024/1024, math.Float64frombits(atomic.LoadUint64(&mux.latency)))
+						writeResult([]float64{
+							mux.bw.Get() / 1024 / 1024,
+							math.Float64frombits(atomic.LoadUint64(&mux.latency)),
+						}, serverResultFileName)
+					}
+				}
 			}()
 			io.Copy(clientConn, userConn)
 		}(userConn)
@@ -107,6 +131,8 @@ func TestClient(t *testing.T) {
 		t.Fatal(err, tc)
 	}
 	// do some tc settings
+	tc.delay("add", "30ms", "10ms", "5%")
+	tc.Run()
 	serverConn, err := net.Dial("tcp", serverIp+":"+bridgePort)
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +156,9 @@ func TestClient(t *testing.T) {
 			go io.Copy(userConn, appConn)
 			go func() {
 				time.Sleep(time.Second * 10)
-				writeResult([]string{
-					strconv.Itoa(int(mux.bw.Get() / 1024 / 1024)),
-					strconv.Itoa(int(math.Float64frombits(atomic.LoadUint64(&mux.latency)))),
+				writeResult([]float64{
+					mux.bw.Get() / 1024 / 1024,
+					math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 				}, clientResultFileName)
 			}()
 			io.Copy(appConn, userConn)
@@ -145,6 +171,8 @@ func TestApp(t *testing.T) {
 		t.Fatal(err, tc)
 	}
 	// do some tc settings
+	tc.delay("add", "40ms", "5ms", "1%")
+	tc.Run()
 	appListener, err := net.Listen("tcp", appIp+":"+appPort)
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +216,7 @@ func TestApp(t *testing.T) {
 			// read bandwidth
 			readBw := 100 / time.Now().Sub(startTime).Seconds()
 			// save result
-			err := writeResult([]string{strconv.Itoa(int(writeBw)), strconv.Itoa(int(readBw)),}, appResultFileName)
+			err := writeResult([]float64{writeBw, readBw,}, appResultFileName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,6 +224,13 @@ func TestApp(t *testing.T) {
 	}
 }
 func TestUser(t *testing.T) {
+	tc, err := NewTrafficControl(userIp)
+	if err != nil {
+		t.Fatal(err, tc)
+	}
+	// do some tc settings
+	tc.delay("add", "20ms", "40ms", "50%")
+	tc.Run()
 	appConn, err := net.Dial("tcp", serverIp+":"+serverPort)
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +268,7 @@ func TestUser(t *testing.T) {
 	// send bandwidth
 	writeBw := 100 / time.Now().Sub(startTime).Seconds()
 	// save result
-	err = writeResult([]string{strconv.Itoa(int(readBw)), strconv.Itoa(int(writeBw)),}, userResultFileName)
+	err = writeResult([]float64{readBw, writeBw,}, userResultFileName)
 	if err != nil {
 		t.Fatal(err)
 	}
