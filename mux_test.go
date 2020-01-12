@@ -80,6 +80,22 @@ func writeResult(values []float64, outfile string) error {
 	return err
 }
 
+func appendResult(values []float64, outfile string) error {
+	file, err := os.OpenFile(fileSavePath+outfile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("writer", err)
+		return err
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	for _, v := range values {
+		writer.WriteString(fmt.Sprintf("%.2f", v))
+		writer.WriteString("\n")
+		writer.Flush()
+	}
+	return err
+}
+
 func TestServer(t *testing.T) {
 	tc, err := NewTrafficControl(serverIp)
 	if err != nil {
@@ -88,6 +104,7 @@ func TestServer(t *testing.T) {
 	// do some tc settings
 	tc.delay("add", "50ms", "10ms", "10%")
 	tc.Run()
+	tc.bandwidth("1Mbit")
 	// start bridge
 	bridgeListener, err := net.Listen("tcp", serverIp+":"+bridgePort)
 	if err != nil {
@@ -121,12 +138,16 @@ func TestServer(t *testing.T) {
 			}
 			go io.Copy(userConn, clientConn)
 			go func() {
-				ticker := time.NewTicker(time.Second * 10)
+				writeResult([]float64{
+					mux.bw.Get() / 1024 / 1024,
+					math.Float64frombits(atomic.LoadUint64(&mux.latency)),
+				}, serverResultFileName)
+				ticker := time.NewTicker(time.Second * 1)
 				for {
 					select {
 					case <-ticker.C:
 						fmt.Println(mux.bw.Get()/1024/1024, math.Float64frombits(atomic.LoadUint64(&mux.latency)))
-						writeResult([]float64{
+						appendResult([]float64{
 							mux.bw.Get() / 1024 / 1024,
 							math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 						}, serverResultFileName)
@@ -146,6 +167,7 @@ func TestClient(t *testing.T) {
 	// do some tc settings
 	tc.delay("add", "30ms", "10ms", "5%")
 	tc.Run()
+	tc.bandwidth("1Mbit")
 	serverConn, err := net.Dial("tcp", serverIp+":"+bridgePort)
 	if err != nil {
 		t.Fatal(err)
@@ -168,11 +190,20 @@ func TestClient(t *testing.T) {
 			defer userConn.Close()
 			go io.Copy(userConn, appConn)
 			go func() {
-				time.Sleep(time.Second * 10)
 				writeResult([]float64{
 					mux.bw.Get() / 1024 / 1024,
 					math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 				}, clientResultFileName)
+				ticker := time.NewTicker(time.Second * 1)
+				for {
+					select {
+					case <-ticker.C:
+						appendResult([]float64{
+							mux.bw.Get() / 1024 / 1024,
+							math.Float64frombits(atomic.LoadUint64(&mux.latency)),
+						}, clientResultFileName)
+					}
+				}
 			}()
 			io.Copy(appConn, userConn)
 			os.Exit(0)
@@ -187,6 +218,7 @@ func TestApp(t *testing.T) {
 	// do some tc settings
 	tc.delay("add", "40ms", "5ms", "1%")
 	tc.Run()
+	tc.bandwidth("1Mbit")
 	appListener, err := net.Listen("tcp", appIp+":"+appPort)
 	if err != nil {
 		t.Fatal(err)
@@ -197,10 +229,10 @@ func TestApp(t *testing.T) {
 			t.Fatal(err)
 		}
 		go func(userConn net.Conn) {
-			b := bytes.Repeat([]byte{0,}, 1024)
+			b := bytes.Repeat([]byte{0}, 1024)
 			startTime := time.Now()
-			// send 100mb data to user
-			for i := 0; i < 1024*100; i++ {
+			// send 1000mb data to user
+			for i := 0; i < 1024*1000; i++ {
 				n, err := userConn.Write(b)
 				if err != nil {
 					t.Fatal(err)
@@ -210,11 +242,11 @@ func TestApp(t *testing.T) {
 				}
 			}
 			// send bandwidth
-			writeBw := 100 / time.Now().Sub(startTime).Seconds()
+			writeBw := 1000 / time.Now().Sub(startTime).Seconds()
 			// get 100md from user
 			startTime = time.Now()
 			readLen := 0
-			for i := 0; i < 1024*10000; i++ {
+			for i := 0; i < 1024*100000; i++ {
 				n, err := userConn.Read(b)
 				fmt.Println(n)
 				if err != nil {
@@ -222,18 +254,18 @@ func TestApp(t *testing.T) {
 				}
 				fmt.Println(readLen)
 				readLen += n
-				if readLen == 1024*1024*100 {
+				if readLen == 1024*1024*1000 {
 					break
 				}
 			}
-			if readLen != 1024*1024*100 {
+			if readLen != 1024*1024*1000 {
 				t.Fatal("the read len is not right")
 			}
 			userConn.Write([]byte{0})
 			// read bandwidth
-			readBw := 100 / time.Now().Sub(startTime).Seconds()
+			readBw := 1000 / time.Now().Sub(startTime).Seconds()
 			// save result
-			err := writeResult([]float64{writeBw, readBw,}, appResultFileName)
+			err := writeResult([]float64{writeBw, readBw}, appResultFileName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -249,33 +281,34 @@ func TestUser(t *testing.T) {
 	// do some tc settings
 	tc.delay("add", "20ms", "40ms", "50%")
 	tc.Run()
+	tc.bandwidth("1Mbit")
 	appConn, err := net.Dial("tcp", serverIp+":"+serverPort)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := bytes.Repeat([]byte{0,}, 1024)
+	b := bytes.Repeat([]byte{0}, 1024)
 	startTime := time.Now()
 	// get 100md from app
 	readLen := 0
-	for i := 0; i < 1024*10000; i++ {
+	for i := 0; i < 1024*100000; i++ {
 		n, err := appConn.Read(b)
 		if err != nil {
 			log.Fatal(err)
 		}
 		readLen += n
-		if readLen == 1024*1024*100 {
+		if readLen == 1024*1024*1000 {
 			break
 		}
 	}
-	if readLen != 1024*1024*100 {
-		t.Fatal("the read len is not right", readLen, 1024*1024*100)
+	if readLen != 1024*1024*1000 {
+		t.Fatal("the read len is not right", readLen, 1024*1024*1000)
 	}
 	// read bandwidth
-	readBw := 100 / time.Now().Sub(startTime).Seconds()
+	readBw := 1000 / time.Now().Sub(startTime).Seconds()
 	// send 100mb data to app
 	startTime = time.Now()
-	b = bytes.Repeat([]byte{0,}, 1024)
-	for i := 0; i < 1024*100; i++ {
+	b = bytes.Repeat([]byte{0}, 1024)
+	for i := 0; i < 1024*1000; i++ {
 		n, err := appConn.Write(b)
 		if err != nil {
 			t.Fatal(err)
@@ -290,9 +323,9 @@ func TestUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	// send bandwidth
-	writeBw := 100 / time.Now().Sub(startTime).Seconds()
+	writeBw := 1000 / time.Now().Sub(startTime).Seconds()
 	// save result
-	err = writeResult([]float64{readBw, writeBw,}, userResultFileName)
+	err = writeResult([]float64{readBw, writeBw}, userResultFileName)
 	if err != nil {
 		t.Fatal(err)
 	}
