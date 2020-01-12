@@ -36,6 +36,7 @@ var clientResultFileName = "client.txt"
 var dockerNetWorkName = "test"
 var network = "172.18.0.0/16"
 var fileSavePath = "/usr/src/myapp/"
+var dataSize = 1024 * 1024 * 100
 
 func TestMux(t *testing.T) {
 	pwd, err := os.Getwd()
@@ -231,8 +232,8 @@ func TestApp(t *testing.T) {
 		go func(userConn net.Conn) {
 			b := bytes.Repeat([]byte{0}, 1024)
 			startTime := time.Now()
-			// send 1000mb data to user
-			for i := 0; i < 1024*1000; i++ {
+			// send data to user
+			for i := 0; i < dataSize/1024; i++ {
 				n, err := userConn.Write(b)
 				if err != nil {
 					t.Fatal(err)
@@ -242,11 +243,11 @@ func TestApp(t *testing.T) {
 				}
 			}
 			// send bandwidth
-			writeBw := 1000 / time.Now().Sub(startTime).Seconds()
+			writeBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 			// get 100md from user
 			startTime = time.Now()
 			readLen := 0
-			for i := 0; i < 1024*100000; i++ {
+			for i := 0; i < 2<<32; i++ {
 				n, err := userConn.Read(b)
 				fmt.Println(n)
 				if err != nil {
@@ -254,16 +255,16 @@ func TestApp(t *testing.T) {
 				}
 				fmt.Println(readLen)
 				readLen += n
-				if readLen == 1024*1024*1000 {
+				if readLen == dataSize {
 					break
 				}
 			}
-			if readLen != 1024*1024*1000 {
+			if readLen != dataSize {
 				t.Fatal("the read len is not right")
 			}
 			userConn.Write([]byte{0})
 			// read bandwidth
-			readBw := 1000 / time.Now().Sub(startTime).Seconds()
+			readBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 			// save result
 			err := writeResult([]float64{writeBw, readBw}, appResultFileName)
 			if err != nil {
@@ -290,25 +291,25 @@ func TestUser(t *testing.T) {
 	startTime := time.Now()
 	// get 100md from app
 	readLen := 0
-	for i := 0; i < 1024*100000; i++ {
+	for i := 0; i < 2<<32; i++ {
 		n, err := appConn.Read(b)
 		if err != nil {
 			log.Fatal(err)
 		}
 		readLen += n
-		if readLen == 1024*1024*1000 {
+		if readLen == dataSize {
 			break
 		}
 	}
-	if readLen != 1024*1024*1000 {
-		t.Fatal("the read len is not right", readLen, 1024*1024*1000)
+	if readLen != dataSize {
+		t.Fatal("the read len is not right", readLen, dataSize)
 	}
 	// read bandwidth
-	readBw := 1000 / time.Now().Sub(startTime).Seconds()
+	readBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 	// send 100mb data to app
 	startTime = time.Now()
-	b = bytes.Repeat([]byte{0}, 1024)
-	for i := 0; i < 1024*1000; i++ {
+	b = bytes.Repeat([]byte{0,}, 1024)
+	for i := 0; i < dataSize/1024; i++ {
 		n, err := appConn.Write(b)
 		if err != nil {
 			t.Fatal(err)
@@ -323,7 +324,7 @@ func TestUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	// send bandwidth
-	writeBw := 1000 / time.Now().Sub(startTime).Seconds()
+	writeBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 	// save result
 	err = writeResult([]float64{readBw, writeBw}, userResultFileName)
 	if err != nil {
