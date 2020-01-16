@@ -308,7 +308,7 @@ func TestUser(t *testing.T) {
 	readBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 	// send 100mb data to app
 	startTime = time.Now()
-	b = bytes.Repeat([]byte{0,}, 1024)
+	b = bytes.Repeat([]byte{0}, 1024)
 	for i := 0; i < dataSize/1024; i++ {
 		n, err := appConn.Write(b)
 		if err != nil {
@@ -392,13 +392,13 @@ func TestNewMux(t *testing.T) {
 	go func() {
 		m2 := NewMux(conn2, "tcp")
 		for {
-			log.Println("npc starting accept")
+			//log.Println("npc starting accept")
 			c, err := m2.Accept()
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			log.Println("npc accept success ")
+			//log.Println("npc accept success ")
 			c2, err := net.Dial("tcp", "127.0.0.1:80")
 			if err != nil {
 				log.Println(err)
@@ -409,19 +409,21 @@ func TestNewMux(t *testing.T) {
 			//c2.(*net.TCPConn).SetReadBuffer(0)
 			go func(c2 net.Conn, c *conn) {
 				go func() {
-					_, err = io.Copy(c2, c)
-					if err != nil {
-						c2.Close()
-						c.Close()
-						//logs.Warn("close npc by copy from nps", err, c.connId)
-					}
-				}()
-				_, err = io.Copy(c, c2)
-				if err != nil {
+					buf := make([]byte, 32<<10)
+					_, err = io.CopyBuffer(c2, c, buf)
+					//if err != nil {
+					//	log.Println("close npc by copy from nps", err, c.connId)
+					//}
 					c2.Close()
 					c.Close()
-					//logs.Warn("close npc by copy from server", err, c.connId)
-				}
+				}()
+				buf := make([]byte, 32<<10)
+				_, err = io.CopyBuffer(c, c2, buf)
+				//if err != nil {
+				//	log.Println("close npc by copy from server", err, c.connId)
+				//}
+				c2.Close()
+				c.Close()
 			}(c2, c.(*conn))
 		}
 	}()
@@ -433,7 +435,7 @@ func TestNewMux(t *testing.T) {
 			log.Println(err)
 		}
 		for {
-			log.Println("nps starting accept")
+			//log.Println("nps starting accept")
 			conns, err := l.Accept()
 			if err != nil {
 				log.Println(err)
@@ -441,7 +443,7 @@ func TestNewMux(t *testing.T) {
 			}
 			//conns.(*net.TCPConn).SetReadBuffer(0)
 			//conns.(*net.TCPConn).SetReadBuffer(0)
-			log.Println("nps accept success starting New conn")
+			//log.Println("nps accept success starting New conn")
 			tmpCpnn, err := m1.NewConn()
 			if err != nil {
 				log.Println("nps New conn err ", err)
@@ -450,20 +452,22 @@ func TestNewMux(t *testing.T) {
 			//logs.Warn("nps New conn success ", tmpCpnn.connId)
 			go func(tmpCpnn *conn, conns net.Conn) {
 				go func() {
-					_, err := io.Copy(tmpCpnn, conns)
-					if err != nil {
-						conns.Close()
-						tmpCpnn.Close()
-						//logs.Warn("close nps by copy from user", tmpCpnn.connId, err)
-					}
-				}()
-				time.Sleep(time.Second)
-				_, err = io.Copy(conns, tmpCpnn)
-				if err != nil {
+					buf := make([]byte, 32<<10)
+					_, _ = io.CopyBuffer(tmpCpnn, conns, buf)
+					//if err != nil {
+					//	log.Println("close nps by copy from user", tmpCpnn.connId, err)
+					//}
 					conns.Close()
 					tmpCpnn.Close()
-					//logs.Warn("close nps by copy from npc ", tmpCpnn.connId, err)
-				}
+				}()
+				time.Sleep(time.Second)
+				buf := make([]byte, 32<<10)
+				_, err = io.CopyBuffer(conns, tmpCpnn, buf)
+				//if err != nil {
+				//	log.Println("close nps by copy from npc ", tmpCpnn.connId, err)
+				//}
+				conns.Close()
+				tmpCpnn.Close()
 			}(tmpCpnn, conns)
 		}
 	}()
