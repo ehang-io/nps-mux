@@ -175,7 +175,7 @@ func (Self *receiveWindow) New(mux *Mux) {
 	Self.maxSizeDone = Self.pack(maximumSegmentSize*30, 0, false)
 	Self.mux = mux
 	Self.window.New()
-	Self.bw = NewWriteBandwidth()
+	Self.bw = newWriteBandwidth()
 }
 
 func (Self *receiveWindow) remainingSize(maxSize uint32, delta uint16) (n uint32) {
@@ -195,6 +195,10 @@ func (Self *receiveWindow) calcSize() {
 		connBw := Self.bw.Get()
 		var n uint32
 		if connBw > 0 && muxBw > 0 {
+			if connBw > muxBw {
+				connBw = muxBw
+				Self.bw.GrowRatio()
+			}
 			n = uint32(math.Float64frombits(atomic.LoadUint64(&Self.mux.latency)) *
 				(muxBw + connBw))
 		}
@@ -611,12 +615,13 @@ type writeBandwidth struct {
 	readEnd   time.Time
 	duration  float64
 	bufLength uint32
+	ratio     uint32
 }
 
 const writeCalcThreshold uint32 = 5 * 1024 * 1024
 
-func NewWriteBandwidth() *writeBandwidth {
-	return &writeBandwidth{}
+func newWriteBandwidth() *writeBandwidth {
+	return &writeBandwidth{ratio: 1}
 }
 
 func (Self *writeBandwidth) StartRead() {
@@ -624,7 +629,7 @@ func (Self *writeBandwidth) StartRead() {
 		Self.readEnd = time.Now()
 	}
 	Self.duration += time.Now().Sub(Self.readEnd).Seconds()
-	if Self.bufLength >= writeCalcThreshold {
+	if Self.bufLength >= writeCalcThreshold*atomic.LoadUint32(&Self.ratio) {
 		Self.calcBandWidth()
 	}
 }
@@ -651,4 +656,8 @@ func (Self *writeBandwidth) Get() (bw float64) {
 		bw = 0
 	}
 	return
+}
+
+func (Self *writeBandwidth) GrowRatio() {
+	atomic.AddUint32(&Self.ratio, 1)
 }
