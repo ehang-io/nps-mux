@@ -136,6 +136,13 @@ func (s *Mux) writeSession() {
 			if s.IsClose {
 				break
 			}
+			//if pack.flag == muxNewMsg || pack.flag == muxNewMsgPart {
+			//	if pack.length >= 100 {
+			//		log.Println("write session id", pack.id, "\n", string(pack.content[:100]))
+			//	} else {
+			//		log.Println("write session id", pack.id, "\n", string(pack.content[:pack.length]))
+			//	}
+			//}
 			err := pack.Pack(s.conn)
 			muxPack.Put(pack)
 			if err != nil {
@@ -200,7 +207,7 @@ func (s *Mux) ping() {
 				atomic.StoreUint64(&s.latency, math.Float64bits(s.counter.Latency(latency)))
 				// convert float64 to bits, store it atomic
 			}
-			if cap(data) > 0 {
+			if cap(data) > 0 && !s.IsClose {
 				windowBuff.Put(data)
 			}
 		}
@@ -224,12 +231,12 @@ func (s *Mux) readSession() {
 		}
 	}()
 	go func() {
-		pack := muxPack.Get()
+		var pack *muxPackager
 		var l uint16
 		var err error
 		for {
 			if s.IsClose {
-				break
+				return
 			}
 			pack = muxPack.Get()
 			s.bw.StartRead()
@@ -240,6 +247,13 @@ func (s *Mux) readSession() {
 			}
 			s.bw.SetCopySize(l)
 			atomic.StoreUint32(&s.pingOk, 0)
+			//if pack.flag == muxNewMsg || pack.flag == muxNewMsgPart {
+			//	if pack.length >= 100 {
+			//		log.Printf("read session id %d pointer %p\n%v", pack.id, pack.content, string(pack.content[:100]))
+			//	} else {
+			//		log.Printf("read session id %d pointer %p\n%v", pack.id, pack.content, string(pack.content[:pack.length]))
+			//	}
+			//}
 			switch pack.flag {
 			case muxNewConn: //New connection
 				connection := NewConn(pack.id, s)
@@ -284,8 +298,6 @@ func (s *Mux) readSession() {
 			}
 			muxPack.Put(pack)
 		}
-		muxPack.Put(pack)
-		_ = s.Close()
 	}()
 }
 
@@ -305,13 +317,13 @@ func (s *Mux) newMsg(connection *conn, pack *muxPackager) (err error) {
 }
 
 func (s *Mux) Close() (err error) {
-	log.Println("close mux")
 	if s.IsClose {
 		return errors.New("the mux has closed")
 	}
 	s.IsClose = true
+	log.Println("close mux")
 	s.connMap.Close()
-	s.connMap = nil
+	//s.connMap = nil
 	s.closeChan <- struct{}{}
 	close(s.newConnCh)
 	err = s.conn.Close()

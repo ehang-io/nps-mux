@@ -23,12 +23,24 @@ func newWindowBufferPool() *windowBufferPool {
 	}
 }
 
+//func trace(buf []byte, ty string) {
+//	pc := make([]uintptr, 10) // at least 1 entry needed
+//	n := runtime.Callers(0, pc)
+//	for i := 0; i < n; i++ {
+//		f := runtime.FuncForPC(pc[i])
+//		file, line := f.FileLine(pc[i])
+//		log.Printf("%v %p %s:%d %s\n", ty, buf, file, line, f.Name())
+//	}
+//}
+
 func (Self *windowBufferPool) Get() (buf []byte) {
 	buf = Self.pool.Get().([]byte)
+	//trace(buf, "get")
 	return buf[:poolSizeWindow]
 }
 
 func (Self *windowBufferPool) Put(x []byte) {
+	//trace(x, "put")
 	Self.pool.Put(x[:poolSizeWindow]) // make buf to full
 }
 
