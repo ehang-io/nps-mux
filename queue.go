@@ -428,29 +428,30 @@ func (d *bufDequeue) pushHead(val unsafe.Pointer) bool {
 // It returns false if the queue is empty. It may be called by any
 // number of consumers.
 func (d *bufDequeue) popTail() (unsafe.Pointer, bool) {
-	ptrs := atomic.LoadUint64(&d.headTail)
-	head, tail := d.unpack(ptrs)
-	if tail == head {
-		// Queue is empty.
-		return nil, false
-	}
-	slot := &d.vals[tail&uint32(len(d.vals)-1)]
 	var val unsafe.Pointer
+	var head, tail uint32
 	for {
+		ptrs := atomic.LoadUint64(&d.headTail)
+		head, tail = d.unpack(ptrs)
+		if tail == head {
+			// Queue is empty.
+			return nil, false
+		}
+		slot := &d.vals[tail&uint32(len(d.vals)-1)]
 		val = atomic.LoadPointer(slot)
 		if val != nil {
-			// We now own slot.
-			break
+			// We now get a slot.
+			if atomic.CompareAndSwapPointer(slot, val, nil) {
+				break
+				// Tell pushHead that we're done with this slot. Zeroing the
+				// slot is also important so we don't leave behind references
+				// that could keep this object live longer than necessary.
+				//
+				// We write to val first and then publish that we're done with
+			}
 		}
-		// Another goroutine is still pushing data on the tail.
+		// Maybe the value was taken by other goroutine or not push yet.
 	}
-
-	// Tell pushHead that we're done with this slot. Zeroing the
-	// slot is also important so we don't leave behind references
-	// that could keep this object live longer than necessary.
-	//
-	// We write to val first and then publish that we're done with
-	atomic.StorePointer(slot, nil)
 	// At this point pushHead owns the slot.
 	if tail < math.MaxUint32 {
 		atomic.AddUint64(&d.headTail, 1)
