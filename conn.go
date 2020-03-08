@@ -193,17 +193,23 @@ func (Self *receiveWindow) calcSize() {
 	if Self.count == 0 {
 		muxBw := Self.mux.bw.Get()
 		connBw := Self.bw.Get()
+		latency := math.Float64frombits(atomic.LoadUint64(&Self.mux.latency))
 		var n uint32
 		if connBw > 0 && muxBw > 0 {
 			if connBw > muxBw {
 				connBw = muxBw
 				Self.bw.GrowRatio()
 			}
-			n = uint32(math.Float64frombits(atomic.LoadUint64(&Self.mux.latency)) *
-				(muxBw + connBw))
+			n = uint32(latency * (muxBw + connBw))
 		}
 		if n < maximumSegmentSize*30 {
 			n = maximumSegmentSize * 30
+		}
+		if n < maximumSegmentSize*3000*uint32(latency) {
+			// latency gain
+			// if there are some latency more than 10ms will trigger this gain
+			// network pipeline need fill more data that we can measure the max bandwidth
+			n = maximumSegmentSize * 3000 * uint32(latency)
 		}
 		for {
 			ptrs := atomic.LoadUint64(&Self.maxSizeDone)

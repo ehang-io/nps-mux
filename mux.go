@@ -202,7 +202,7 @@ func (s *Mux) ping() {
 				break
 			}
 			_ = now.UnmarshalText(data)
-			latency := time.Now().UTC().Sub(now).Seconds() / 2
+			latency := time.Now().UTC().Sub(now).Seconds()
 			if latency > 0 {
 				atomic.StoreUint64(&s.latency, math.Float64bits(s.counter.Latency(latency)))
 				// convert float64 to bits, store it atomic
