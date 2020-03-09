@@ -327,6 +327,7 @@ func (Self *receiveWindowQueue) waitPush() (err error) {
 func (Self *receiveWindowQueue) Len() (n uint32) {
 	ptrs := atomic.LoadUint64(&Self.lengthWait)
 	n, _ = Self.chain.head.unpack(ptrs)
+	// just for unpack method use
 	return
 }
 

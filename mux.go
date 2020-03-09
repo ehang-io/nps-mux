@@ -206,6 +206,7 @@ func (s *Mux) ping() {
 			if latency > 0 {
 				atomic.StoreUint64(&s.latency, math.Float64bits(s.counter.Latency(latency)))
 				// convert float64 to bits, store it atomic
+				//log.Println("ping", math.Float64frombits(atomic.LoadUint64(&s.latency)))
 			}
 			if cap(data) > 0 && !s.IsClose {
 				windowBuff.Put(data)
@@ -436,6 +437,9 @@ type latencyCounter struct {
 	headMin uint8 //head indicate the head in ring buffer,
 	// in meaning, slot in list will be replaced;
 	// min indicate this slot value is minimal in list.
+
+	// we delineate the effective range with three times the minimum latency
+	// average of effective latency for all current data as a mux latency
 }
 
 func (Self *latencyCounter) unpack(idxs uint8) (head, min uint8) {
@@ -482,25 +486,22 @@ func (Self *latencyCounter) minimal() (min uint8) {
 
 func (Self *latencyCounter) Latency(value float64) (latency float64) {
 	Self.add(value)
-	_, min := Self.unpack(Self.headMin)
-	latency = Self.buf[min] * Self.countSuccess()
+	latency = Self.countSuccess()
 	return
 }
 
-const lossRatio = 1.6
+const lossRatio = 3
 
 func (Self *latencyCounter) countSuccess() (successRate float64) {
-	var success, loss, i uint8
+	var i, success uint8
 	_, min := Self.unpack(Self.headMin)
 	for i = 0; i < counterMask; i++ {
-		if Self.buf[i] > lossRatio*Self.buf[min] && Self.buf[i] > 0 {
-			loss++
-		}
 		if Self.buf[i] <= lossRatio*Self.buf[min] && Self.buf[i] > 0 {
 			success++
+			successRate += Self.buf[i]
 		}
 	}
 	// counting all the data in the ring buf, except zero
-	successRate = float64(success) / float64(loss+success)
+	successRate = successRate / float64(success)
 	return
 }

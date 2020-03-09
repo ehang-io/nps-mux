@@ -205,23 +205,38 @@ func (Self *receiveWindow) calcSize() {
 		if n < maximumSegmentSize*30 {
 			n = maximumSegmentSize * 30
 		}
-		if n < maximumSegmentSize*3000*uint32(latency) {
+		if n < uint32(float64(maximumSegmentSize*3000)*latency) {
 			// latency gain
 			// if there are some latency more than 10ms will trigger this gain
 			// network pipeline need fill more data that we can measure the max bandwidth
-			n = maximumSegmentSize * 3000 * uint32(latency)
+			n = uint32(float64(maximumSegmentSize*3000) * latency)
 		}
 		for {
 			ptrs := atomic.LoadUint64(&Self.maxSizeDone)
 			size, read, wait := Self.unpack(ptrs)
+			rem := Self.remainingSize(size, 0)
+			ra := float64(rem) / float64(size)
+			if ra > 0.8 {
+				// low fill window gain
+				// if receive window keep low fill, maybe pipeline fill the data, we need a gain
+				// less than 20% fill, gain will trigger
+				n = uint32(float64(n) * 1.5625 * ra * ra)
+			}
 			if n < size/2 {
 				n = size / 2
 				// half reduce
 			}
 			// set the minimal size
 			if n > 2*size {
-				n = 2 * size
-				// twice grow
+				if size == maximumSegmentSize*30 {
+					// we give more ratio when the initial window size, to reduce the time window grow up
+					if n > size*6 {
+						n = size * 6
+					}
+				} else {
+					n = 2 * size
+					// twice grow
+				}
 			}
 			if connBw > 0 && muxBw > 0 {
 				limit := uint32(maximumWindowSize * (connBw / (muxBw + connBw)))
@@ -467,6 +482,7 @@ func (Self *sendWindow) SetSize(currentMaxSizeDone uint64) (closed bool) {
 		}
 		// remain > 0, change wait to false. or remain == 0, wait is false, just keep it
 		if atomic.CompareAndSwapUint64(&Self.maxSizeDone, ptrs, Self.pack(currentMaxSize, send, newWait)) {
+			//log.Printf("currentMaxSize:%d read:%d send:%d", currentMaxSize, read, send)
 			break
 		}
 		// anther goroutine change wait status or window size
