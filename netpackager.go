@@ -132,8 +132,10 @@ func (Self *muxPackager) UnPack(reader io.Reader) (n uint16, err error) {
 	Self.id = int32(binary.LittleEndian.Uint32(Self.buf[1:5]))
 	switch Self.flag {
 	case muxNewMsg, muxNewMsgPart, muxPingFlag, muxPingReturn:
+		var m uint16
 		Self.content = windowBuff.Get() // need Get a window buf from pool
-		n, err = Self.basePackager.UnPack(reader)
+		m, err = Self.basePackager.UnPack(reader)
+		n += m
 	case muxMsgSendOk:
 		l, err = io.ReadFull(reader, Self.buf[5:13])
 		Self.window = binary.LittleEndian.Uint64(Self.buf[5:13])
