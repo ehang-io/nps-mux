@@ -30,40 +30,49 @@ const (
 type Mux struct {
 	latency uint64 // we store latency in bits, but it's float64
 	net.Listener
-	conn          net.Conn
-	connMap       *connMap
-	newConnCh     chan *conn
-	id            int32
-	closeChan     chan struct{}
-	IsClose       bool
-	pingOk        uint32
-	counter       *latencyCounter
-	bw            *bandwidth
-	pingCh        chan []byte
-	pingCheckTime uint32
-	connType      string
-	writeQueue    priorityQueue
-	newConnQueue  connQueue
+	conn               net.Conn
+	connMap            *connMap
+	newConnCh          chan *conn
+	id                 int32
+	closeChan          chan struct{}
+	IsClose            bool
+	counter            *latencyCounter
+	bw                 *bandwidth
+	pingCh             chan []byte
+	pingCheckTime      uint32 // we check the ping per 5s
+	pingCheckThreshold uint32
+	connType           string
+	writeQueue         priorityQueue
+	newConnQueue       connQueue
 }
 
-func NewMux(c net.Conn, connType string) *Mux {
+func NewMux(c net.Conn, connType string, pingCheckThreshold int) *Mux {
 	//c.(*net.TCPConn).SetReadBuffer(0)
 	//c.(*net.TCPConn).SetWriteBuffer(0)
 	fd, err := getConnFd(c)
 	if err != nil {
 		log.Println(err)
 	}
+	var checkThreshold uint32
+	if pingCheckThreshold <= 0 {
+		if connType == "kcp" {
+			checkThreshold = 20
+		} else {
+			checkThreshold = 60
+		}
+	}
 	m := &Mux{
-		conn:      c,
-		connMap:   NewConnMap(),
-		id:        0,
-		closeChan: make(chan struct{}, 1),
-		newConnCh: make(chan *conn),
-		bw:        NewBandwidth(fd),
-		IsClose:   false,
-		connType:  connType,
-		pingCh:    make(chan []byte),
-		counter:   newLatencyCounter(),
+		conn:               c,
+		connMap:            NewConnMap(),
+		id:                 0,
+		closeChan:          make(chan struct{}, 1),
+		newConnCh:          make(chan *conn),
+		bw:                 NewBandwidth(fd),
+		IsClose:            false,
+		connType:           connType,
+		pingCh:             make(chan []byte),
+		pingCheckThreshold: checkThreshold,
+		counter:            newLatencyCounter(),
 	}
 	m.writeQueue.New()
 	m.newConnQueue.New()
@@ -168,22 +177,16 @@ func (s *Mux) ping() {
 			select {
 			case <-ticker.C:
 			}
-			if atomic.LoadUint32(&s.pingCheckTime) >= 60 {
+			if atomic.LoadUint32(&s.pingCheckTime) > s.pingCheckThreshold {
 				log.Println("mux: ping time out")
 				_ = s.Close()
-				// more than 5 minutes not receive the ping return package,
+				// more than limit times not receive the ping return package,
 				// mux conn is damaged, maybe a packet drop, close it
 				break
 			}
 			now, _ := time.Now().UTC().MarshalText()
 			s.sendInfo(muxPingFlag, muxPing, now)
 			atomic.AddUint32(&s.pingCheckTime, 1)
-			if atomic.LoadUint32(&s.pingOk) > 10 && s.connType == "kcp" {
-				log.Println("mux: kcp ping err")
-				_ = s.Close()
-				break
-			}
-			atomic.AddUint32(&s.pingOk, 1)
 		}
 		return
 	}()
@@ -247,7 +250,6 @@ func (s *Mux) readSession() {
 				break
 			}
 			s.bw.SetCopySize(l)
-			atomic.StoreUint32(&s.pingOk, 0)
 			//if pack.flag == muxNewMsg || pack.flag == muxNewMsgPart {
 			//	if pack.length >= 100 {
 			//		log.Printf("read session id %d pointer %p\n%v", pack.id, pack.content, string(pack.content[:100]))
