@@ -60,6 +60,8 @@ func NewMux(c net.Conn, connType string, pingCheckThreshold int) *Mux {
 		} else {
 			checkThreshold = 60
 		}
+	} else {
+		checkThreshold = uint32(pingCheckThreshold)
 	}
 	m := &Mux{
 		conn:               c,
@@ -178,7 +180,7 @@ func (s *Mux) ping() {
 			case <-ticker.C:
 			}
 			if atomic.LoadUint32(&s.pingCheckTime) > s.pingCheckThreshold {
-				log.Println("mux: ping time out")
+				log.Println("mux: ping time out, checktime", s.pingCheckTime, "threshold", s.pingCheckThreshold)
 				_ = s.Close()
 				// more than limit times not receive the ping return package,
 				// mux conn is damaged, maybe a packet drop, close it
