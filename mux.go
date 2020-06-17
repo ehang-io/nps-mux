@@ -331,7 +331,10 @@ func (s *Mux) Close() (err error) {
 	//s.connMap = nil
 	s.closeChan <- struct{}{}
 	close(s.newConnCh)
-	err = s.conn.Close()
+	// while target host close socket without finish steps, conn.Close method maybe blocked
+	// and tcp status change to CLOSE WAIT or TIME WAIT, so we close it in other goroutine
+	_ = s.conn.SetDeadline(time.Now().Add(time.Second * 5))
+	go s.conn.Close()
 	s.release()
 	return
 }
