@@ -186,7 +186,7 @@ func (s *Mux) ping() {
 				// mux conn is damaged, maybe a packet drop, close it
 				break
 			}
-			now, _ := time.Now().UTC().MarshalText()
+			now, _ = time.Now().UTC().MarshalText()
 			s.sendInfo(muxPingFlag, muxPing, now)
 			atomic.AddUint32(&s.pingCheckTime, 1)
 		}
