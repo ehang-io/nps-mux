@@ -45,24 +45,24 @@ func TestMux(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(3)
-	createNetwork(dockerNetWorkName, network)
+	_ = createNetwork(dockerNetWorkName, network)
 	go func() {
 		defer wg.Done()
-		runDocker("server", dockerNetWorkName, serverIp, "TestServer", pwd)
+		_ = runDocker("server", dockerNetWorkName, serverIp, "TestServer", pwd)
 	}()
 	time.Sleep(time.Second * 5)
 	go func() {
 		defer wg.Done()
-		runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
+		_ = runDocker("client", dockerNetWorkName, clientIp, "TestClient", pwd)
 	}()
 	go func() {
 		defer wg.Done()
-		runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
+		_ = runDocker("app", dockerNetWorkName, appIp, "TestApp", pwd)
 	}()
 	time.Sleep(time.Second * 5)
-	runDocker("user", dockerNetWorkName, userIp, "TestUser", pwd)
+	_ = runDocker("user", dockerNetWorkName, userIp, "TestUser", pwd)
 	wg.Wait()
-	deleteNetwork(dockerNetWorkName)
+	_ = deleteNetwork(dockerNetWorkName)
 }
 
 func writeResult(values []float64, outfile string) error {
@@ -74,9 +74,9 @@ func writeResult(values []float64, outfile string) error {
 	defer file.Close()
 	writer := bufio.NewWriter(file)
 	for _, v := range values {
-		writer.WriteString(fmt.Sprintf("%.2f", v))
-		writer.WriteString("\n")
-		writer.Flush()
+		_, _ = writer.WriteString(fmt.Sprintf("%.2f", v))
+		_, _ = writer.WriteString("\n")
+		_ = writer.Flush()
 	}
 	return err
 }
@@ -90,9 +90,9 @@ func appendResult(values []float64, outfile string) error {
 	defer file.Close()
 	writer := bufio.NewWriter(file)
 	for _, v := range values {
-		writer.WriteString(fmt.Sprintf("%.2f", v))
-		writer.WriteString("\n")
-		writer.Flush()
+		_, _ = writer.WriteString(fmt.Sprintf("%.2f", v))
+		_, _ = writer.WriteString("\n")
+		_ = writer.Flush()
 	}
 	return err
 }
@@ -104,8 +104,8 @@ func TestServer(t *testing.T) {
 	}
 	// do some tc settings
 	tc.delay("add", "50ms", "10ms", "10%")
-	tc.Run()
-	tc.bandwidth("1Mbit")
+	_ = tc.Run()
+	_ = tc.bandwidth("1Mbit")
 	// start bridge
 	bridgeListener, err := net.Listen("tcp", serverIp+":"+bridgePort)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestServer(t *testing.T) {
 	}
 	defer clientBridgeConn.Close()
 	// new mux
-	mux := NewMux(clientBridgeConn, "tcp")
+	mux := NewMux(clientBridgeConn, "tcp", 60)
 	// start server port
 	serverListener, err := net.Listen("tcp", serverIp+":"+serverPort)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestServer(t *testing.T) {
 			}
 			go io.Copy(userConn, clientConn)
 			go func() {
-				writeResult([]float64{
+				_ = writeResult([]float64{
 					mux.bw.Get() / 1024 / 1024,
 					math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 				}, serverResultFileName)
@@ -148,14 +148,14 @@ func TestServer(t *testing.T) {
 					select {
 					case <-ticker.C:
 						fmt.Println(mux.bw.Get()/1024/1024, math.Float64frombits(atomic.LoadUint64(&mux.latency)))
-						appendResult([]float64{
+						_ = appendResult([]float64{
 							mux.bw.Get() / 1024 / 1024,
 							math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 						}, serverResultFileName)
 					}
 				}
 			}()
-			io.Copy(clientConn, userConn)
+			_, _ = io.Copy(clientConn, userConn)
 			os.Exit(0)
 		}(userConn)
 	}
@@ -167,14 +167,14 @@ func TestClient(t *testing.T) {
 	}
 	// do some tc settings
 	tc.delay("add", "30ms", "10ms", "5%")
-	tc.Run()
-	tc.bandwidth("1Mbit")
+	_ = tc.Run()
+	_ = tc.bandwidth("1Mbit")
 	serverConn, err := net.Dial("tcp", serverIp+":"+bridgePort)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// crete mux by serverConn
-	mux := NewMux(serverConn, "tcp")
+	mux := NewMux(serverConn, "tcp", 60)
 	// start accept user connection
 	for {
 		userConn, err := mux.Accept()
@@ -191,7 +191,7 @@ func TestClient(t *testing.T) {
 			defer userConn.Close()
 			go io.Copy(userConn, appConn)
 			go func() {
-				writeResult([]float64{
+				_ = writeResult([]float64{
 					mux.bw.Get() / 1024 / 1024,
 					math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 				}, clientResultFileName)
@@ -199,14 +199,14 @@ func TestClient(t *testing.T) {
 				for {
 					select {
 					case <-ticker.C:
-						appendResult([]float64{
+						_ = appendResult([]float64{
 							mux.bw.Get() / 1024 / 1024,
 							math.Float64frombits(atomic.LoadUint64(&mux.latency)),
 						}, clientResultFileName)
 					}
 				}
 			}()
-			io.Copy(appConn, userConn)
+			_, _ = io.Copy(appConn, userConn)
 			os.Exit(0)
 		}(userConn)
 	}
@@ -218,8 +218,8 @@ func TestApp(t *testing.T) {
 	}
 	// do some tc settings
 	tc.delay("add", "40ms", "5ms", "1%")
-	tc.Run()
-	tc.bandwidth("1Mbit")
+	_ = tc.Run()
+	_ = tc.bandwidth("1Mbit")
 	appListener, err := net.Listen("tcp", appIp+":"+appPort)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +262,7 @@ func TestApp(t *testing.T) {
 			if readLen != dataSize {
 				t.Fatal("the read len is not right")
 			}
-			userConn.Write([]byte{0})
+			_, _ = userConn.Write([]byte{0})
 			// read bandwidth
 			readBw := float64(dataSize/1024/1024) / time.Now().Sub(startTime).Seconds()
 			// save result
@@ -281,8 +281,8 @@ func TestUser(t *testing.T) {
 	}
 	// do some tc settings
 	tc.delay("add", "20ms", "40ms", "50%")
-	tc.Run()
-	tc.bandwidth("1Mbit")
+	_ = tc.Run()
+	_ = tc.bandwidth("1Mbit")
 	appConn, err := net.Dial("tcp", serverIp+":"+serverPort)
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestNewMux2(t *testing.T) {
 		rate.Start()
 		conn2 = NewRateConn(rate, conn2)
 		go func() {
-			m2 := NewMux(conn2, "tcp")
+			m2 := NewMux(conn2, "tcp", 60)
 			for {
 				c, err := m2.Accept()
 				if err != nil {
@@ -352,13 +352,13 @@ func TestNewMux2(t *testing.T) {
 					continue
 				}
 				go func() {
-					c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
-					c.Close()
+					_, _ = c.Write(bytes.Repeat([]byte{0}, 1024*1024*100))
+					_ = c.Close()
 				}()
 			}
 		}()
 
-		m1 := NewMux(conn1, "tcp")
+		m1 := NewMux(conn1, "tcp", 60)
 		tmpCpnn, err := m1.NewConn()
 		if err != nil {
 			log.Println("nps new conn err ", err)
@@ -384,13 +384,13 @@ func TestNewMux2(t *testing.T) {
 }
 func TestNewMux(t *testing.T) {
 	go func() {
-		http.ListenAndServe("0.0.0.0:8889", nil)
+		_ = http.ListenAndServe("0.0.0.0:8889", nil)
 	}()
 	server("")
 	client("")
 	time.Sleep(time.Second * 3)
 	go func() {
-		m2 := NewMux(conn2, "tcp")
+		m2 := NewMux(conn2, "tcp", 60)
 		for {
 			//log.Println("npc starting accept")
 			c, err := m2.Accept()
@@ -402,7 +402,7 @@ func TestNewMux(t *testing.T) {
 			c2, err := net.Dial("tcp", "127.0.0.1:80")
 			if err != nil {
 				log.Println(err)
-				c.Close()
+				_ = c.Close()
 				continue
 			}
 			//c2.(*net.TCPConn).SetReadBuffer(0)
@@ -414,22 +414,22 @@ func TestNewMux(t *testing.T) {
 					//if err != nil {
 					//	log.Println("close npc by copy from nps", err, c.connId)
 					//}
-					c2.Close()
-					c.Close()
+					_ = c2.Close()
+					_ = c.Close()
 				}()
 				buf := make([]byte, 32<<10)
 				_, err = io.CopyBuffer(c, c2, buf)
 				//if err != nil {
 				//	log.Println("close npc by copy from server", err, c.connId)
 				//}
-				c2.Close()
-				c.Close()
+				_ = c2.Close()
+				_ = c.Close()
 			}(c2, c.(*conn))
 		}
 	}()
 
 	go func() {
-		m1 := NewMux(conn1, "tcp")
+		m1 := NewMux(conn1, "tcp", 60)
 		l, err := net.Listen("tcp", "127.0.0.1:7777")
 		if err != nil {
 			log.Println(err)
@@ -457,8 +457,8 @@ func TestNewMux(t *testing.T) {
 					//if err != nil {
 					//	log.Println("close nps by copy from user", tmpCpnn.connId, err)
 					//}
-					conns.Close()
-					tmpCpnn.Close()
+					_ = conns.Close()
+					_ = tmpCpnn.Close()
 				}()
 				time.Sleep(time.Second)
 				buf := make([]byte, 32<<10)
@@ -466,8 +466,8 @@ func TestNewMux(t *testing.T) {
 				//if err != nil {
 				//	log.Println("close nps by copy from npc ", tmpCpnn.connId, err)
 				//}
-				conns.Close()
-				tmpCpnn.Close()
+				_ = conns.Close()
+				_ = tmpCpnn.Close()
 			}(tmpCpnn, conns)
 		}
 	}()
@@ -516,7 +516,7 @@ func client(ip string) {
 func test_request() {
 	conn, _ := net.Dial("tcp", "127.0.0.1:7777")
 	for i := 0; i < 1000; i++ {
-		conn.Write([]byte(`GET / HTTP/1.1
+		_, _ = conn.Write([]byte(`GET / HTTP/1.1
 Host: 127.0.0.1:7777
 Connection: keep-alive
 
@@ -547,7 +547,7 @@ func test_raw(k int) {
 			log.Println("conn dial err", err)
 		}
 		tid := time.Now()
-		conn.Write([]byte(`GET /videojs5/video.js HTTP/1.1
+		_, _ = conn.Write([]byte(`GET /videojs5/video.js HTTP/1.1
 Host: 127.0.0.1:7777
 
 
