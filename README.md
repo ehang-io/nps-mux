@@ -6,10 +6,10 @@ A net connection multiplexing implementation base on golang
  - Conn interface implements
  - Lock free queue
  - Slide window
- - Tcp, Kcp reliable stream connection based on
+ - Tcp like reliable stream connection based on
  
 # Usage
-1. Dial or Accept a `net.Conn`, tcp or kcp
+1. Dial or Accept a `net.Conn`
     - client:
     `c_client := net.Dial("tcp", "127.0.0.1:8024")`
     - server:
@@ -17,9 +17,9 @@ A net connection multiplexing implementation base on golang
     `c_server, err := listener.Accept()`
 1. Make connection to mux connection
     - client:
-    `mux_client := nps_mux.NewMux(c_client, "tcp")`
+    `mux_client := nps_mux.NewMux(c_client, "tcp", 60)`
     - server:
-    `mux_server := nps_mux.NewMux(c_server, "tcp")`
+    `mux_server := nps_mux.NewMux(c_server, "tcp", 60)`
 
 1. You can handle new connections both side, like this
     - client:
