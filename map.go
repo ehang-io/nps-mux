@@ -41,6 +41,8 @@ func (s *connMap) Set(id int32, v *conn) {
 }
 
 func (s *connMap) Close() {
+	s.RLock()
+	defer s.RUnlock()
 	for _, v := range s.cMap {
 		_ = v.Close() // close all the connections in the mux
 	}
