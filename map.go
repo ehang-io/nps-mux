@@ -41,7 +41,16 @@ func (s *connMap) Set(id int32, v *conn) {
 }
 
 func (s *connMap) Close() {
+	// first copy cMap, because conn close will call Delete to trigger dead lock
+	var copyMap []*conn
+	s.RLock()
 	for _, v := range s.cMap {
+		copyMap = append(copyMap, v)
+	}
+	s.RUnlock()
+
+	// close connections in cMap
+	for _, v := range copyMap {
 		_ = v.Close() // close all the connections in the mux
 	}
 }
