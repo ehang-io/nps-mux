@@ -334,7 +334,10 @@ func (s *Mux) Close() (err error) {
 	// while target host close socket without finish steps, conn.Close method maybe blocked
 	// and tcp status change to CLOSE WAIT or TIME WAIT, so we close it in other goroutine
 	_ = s.conn.SetDeadline(time.Now().Add(time.Second * 5))
-	go s.conn.Close()
+	go func() {
+		s.conn.Close()
+		s.bw.Close()
+	}()
 	s.release()
 	return
 }
@@ -426,6 +429,10 @@ func (Self *bandwidth) Get() (bw float64) {
 		bw = 0
 	}
 	return
+}
+
+func (Self *bandwidth) Close() error {
+	return Self.fd.Close()
 }
 
 const counterBits = 4
